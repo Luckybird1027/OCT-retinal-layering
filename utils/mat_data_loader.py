@@ -36,4 +36,3 @@ def load_and_slice_mat_images(directory):
     sliced_images_np = np.array(sliced_images)
     print("sliced images np shape: {}".format(sliced_images_np.shape))
     return sliced_images_np
-
