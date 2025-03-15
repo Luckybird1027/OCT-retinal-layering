@@ -55,7 +55,7 @@ def anisotropic_diffusion(img, niter=5, kappa=0.15, gamma=0.1, option=1):
     return out
 
 
-def bm3d_denoising(img, sigma_psd=30 / 255):
+def bm3d_denoising(img, sigma_psd=10 / 255):
     """
     BM3D去噪 - 三维块匹配滤波
     
@@ -71,12 +71,12 @@ def bm3d_denoising(img, sigma_psd=30 / 255):
         img = img / 255.0
 
     # 应用BM3D去噪
-    # 参数设置：块大小8x8，搜索窗21x21
+    # 参数设置
     custom_bm3d_profile = BM3DProfile()
-    custom_bm3d_profile.bs_ht = 8  # 硬阈值处理阶段的块大小
-    custom_bm3d_profile.bs_wiener = 8  # 维纳滤波阶段的块大小
-    custom_bm3d_profile.search_window_ht = 21  # 硬阈值处理阶段的搜索窗口大小
-    custom_bm3d_profile.search_window_wiener = 21  # 维纳滤波阶段的搜索窗口大小
+    custom_bm3d_profile.bs_ht = 4  # 硬阈值处理阶段的块大小
+    custom_bm3d_profile.bs_wiener = 4 # 维纳滤波阶段的块大小
+    custom_bm3d_profile.search_window_ht = 30  # 硬阈值处理阶段的搜索窗口大小
+    custom_bm3d_profile.search_window_wiener = 30  # 维纳滤波阶段的搜索窗口大小
 
     denoised_img = bm3d.bm3d(img, sigma_psd=sigma_psd,
                              stage_arg=bm3d.BM3DStages.ALL_STAGES,

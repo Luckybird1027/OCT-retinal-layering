@@ -34,13 +34,13 @@ def tps_transform(img, num_control_points=16, std_dev=10, regularization=0.3):
             # 添加随机位移，但保持在图像边界内
             dx = np.random.normal(0, std_dev)
             dy = np.random.normal(0, std_dev)
-            x = np.min(np.max(src_points[idx][0] + dx, 0), cols - 1)
-            y = np.min(np.max(src_points[idx][1] + dy, 0), rows - 1)
+            x = np.minimum(np.maximum(src_points[idx][0] + dx, 0), cols - 1)
+            y = np.minimum(np.maximum(src_points[idx][1] + dy, 0), rows - 1)
             dst_points[idx] = [x, y]
     
     # 计算TPS形变
     tps = cv2.createThinPlateSplineShapeTransformer()
-    tps.regularizationParameter = regularization
+    tps.setRegularizationParameter(regularization)
     
     # 将点reshape为需要的格式
     src_points = src_points.reshape(1, -1, 2)
@@ -110,7 +110,7 @@ def perspective_transform(img, angle_range=3):
     P = np.dot(K, R)
     
     # 应用透视变换
-    warped_img = cv2.warpPerspective(img, P[:2], (cols, rows))
+    warped_img = cv2.warpPerspective(img, P, (cols, rows))
     
     return warped_img
 
@@ -210,7 +210,7 @@ def nsct_enhancement(img, decomp_levels=3, directions=[4, 8, 8]):
     # TODO: NSCT库可能需要单独安装或自行实现
     
     # 使用小波变换作为替代演示
-    # 在实际项目中，应使用真正的NSCT变换
+    # TODO: 在实际项目中，应使用真正的NSCT变换
     coeffs = pywt.wavedec2(img, 'db1', level=decomp_levels)
     
     # 增强高频子带
