@@ -6,15 +6,15 @@ from scipy import ndimage
 from scipy.fftpack import fft2, ifft2, fftshift, ifftshift
 
 
-def anisotropic_diffusion(img, niter=5, kappa=0.15, gamma=0.1, option=1):
+def anisotropic_diffusion(img, niter=5, kappa=0.15, gamma=0.2, option=1):
     """
     各向异性扩散 - 实现散斑噪声抑制
     
     参数:
         img: 输入图像
-        niter: 迭代次数，默认为5
-        kappa: 传导系数，默认为0.15
-        gamma: 步长，默认为0.1
+        niter: 迭代次数
+        kappa: 传导系数
+        gamma: 步长
         option: 1或2，选择扩散函数
     
     返回:
@@ -26,9 +26,14 @@ def anisotropic_diffusion(img, niter=5, kappa=0.15, gamma=0.1, option=1):
     # 初始化输出图像为输入图像
     out = img.copy()
 
-    # 构建梯度算子
-    dx = np.array([[-1, 1]])
-    dy = dx.T
+    # 构建Sobel梯度算子
+    dx = np.array([[-1, 0, 1],
+                   [-2, 0, 2],
+                   [-1, 0, 1]])
+
+    dy = np.array([[-1, -2, -1],
+                   [0, 0, 0],
+                   [1, 2, 1]])
 
     for i in range(niter):
         # 计算梯度
@@ -74,7 +79,7 @@ def bm3d_denoising(img, sigma_psd=10 / 255):
     # 参数设置
     custom_bm3d_profile = BM3DProfile()
     custom_bm3d_profile.bs_ht = 4  # 硬阈值处理阶段的块大小
-    custom_bm3d_profile.bs_wiener = 4 # 维纳滤波阶段的块大小
+    custom_bm3d_profile.bs_wiener = 4  # 维纳滤波阶段的块大小
     custom_bm3d_profile.search_window_ht = 30  # 硬阈值处理阶段的搜索窗口大小
     custom_bm3d_profile.search_window_wiener = 30  # 维纳滤波阶段的搜索窗口大小
 
@@ -180,7 +185,7 @@ def advanced_denoising(img):
     img_norm = (img - np.min(img)) / (np.max(img) - np.min(img))
 
     # 步骤1：各向异性扩散算法抑制散斑噪声
-    img_ad = anisotropic_diffusion(img_norm, niter=5, kappa=0.15)
+    img_ad = anisotropic_diffusion(img_norm)
 
     # 步骤2：BM3D多尺度联合去噪
     img_bm3d = bm3d_denoising(img_ad)
