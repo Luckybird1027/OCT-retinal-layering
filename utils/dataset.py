@@ -1,95 +1,80 @@
 import os
+import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from PIL import Image
-import cv2
-from augmentation import apply_random_augmentation
-from preprocess import normalize_image, denoise_image, enhance_contrast
+from utils.advanced_preprocess import advanced_denoising, advanced_enhancement
 
 class OCTDataset(Dataset):
-    """OCT图像数据集"""
-    
-    def __init__(self, image_dir, label_dir=None, transform=None, preprocess=True, augment=False):
-        """
-        初始化
-        
-        参数:
-            image_dir: 图像目录
-            label_dir: 标签目录（可选）
-            transform: 额外的转换
-            preprocess: 是否进行预处理
-            augment: 是否进行数据增强
-        """
-        self.image_dir = image_dir
-        self.label_dir = label_dir
+    def __init__(self, images_dir, masks_dir, img_size=(984, 760), transform=None, preprocess=True):
+        self.images_dir = images_dir
+        self.masks_dir = masks_dir
+        self.img_size = img_size
         self.transform = transform
         self.preprocess = preprocess
-        self.augment = augment
         
-        # 获取所有图像文件
-        self.image_files = [f for f in os.listdir(image_dir) 
-                           if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff'))]
-        
+        self.img_files = sorted([os.path.join(images_dir, f) for f in os.listdir(images_dir) 
+                                if f.endswith('.jpg') or f.endswith('.png')])
+        self.mask_files = sorted([os.path.join(masks_dir, f) for f in os.listdir(masks_dir) 
+                                 if f.endswith('.jpg') or f.endswith('.png')])
+    
     def __len__(self):
-        return len(self.image_files)
+        return len(self.img_files)
     
     def __getitem__(self, idx):
-        # 读取图像
-        img_name = self.image_files[idx]
-        img_path = os.path.join(self.image_dir, img_name)
-        image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        # 读取图像和标签
+        img_path = self.img_files[idx]
+        mask_path = self.mask_files[idx]
         
-        # 读取标签（如果有）
-        label = None
-        if self.label_dir is not None:
-            label_path = os.path.join(self.label_dir, img_name)
-            if os.path.exists(label_path):
-                label = cv2.imread(label_path, cv2.IMREAD_GRAYSCALE)
+        # 使用OpenCV读取图像（灰度模式）
+        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
         
-        # 预处理
+        # 确保图像尺寸一致
+        img = cv2.resize(img, (self.img_size[1], self.img_size[0]), interpolation=cv2.INTER_LINEAR)
+        mask = cv2.resize(mask, (self.img_size[1], self.img_size[0]), interpolation=cv2.INTER_NEAREST)
+        
+        # 标准化图像
+        img = img / 255.0
+        
+        # 应用预处理
         if self.preprocess:
-            image = normalize_image(image)
-            image = denoise_image(image)
-            image = enhance_contrast(image)
+            img = advanced_denoising(img)
+            img = advanced_enhancement(img)
         
-        # 数据增强
-        if self.augment:
-            if label is not None:
-                image, label = apply_random_augmentation(image, label)
-            else:
-                image = apply_random_augmentation(image)
+        # 应用数据增强
+        if self.transform:
+            augmented = self.transform(image=img, mask=mask)
+            img = augmented['image']
+            mask = augmented['mask']
         
-        # 转换为PyTorch张量
-        image = torch.from_numpy(image).float().unsqueeze(0)  # 添加通道维度
+        # 将图像转换为PyTorch张量
+        img = torch.from_numpy(img).float().unsqueeze(0)  # [1, H, W]
+        mask = torch.from_numpy(mask).long()  # [H, W]
         
-        if label is not None:
-            label = torch.from_numpy(label).long()
-            return image, label
-        else:
-            return image
+        return img, mask
 
 # 创建数据加载器
-def create_dataloader(image_dir, label_dir=None, batch_size=4, shuffle=True, preprocess=True, augment=False):
+def create_dataloader(images_dir, masks_dir, img_size=(984, 760), batch_size=4, shuffle=True, preprocess=True):
     """
     创建数据加载器
     
     参数:
-        image_dir: 图像目录
-        label_dir: 标签目录（可选）
+        images_dir: 图像目录
+        masks_dir: 标签目录
+        img_size: 图像尺寸
         batch_size: 批次大小
         shuffle: 是否打乱数据
         preprocess: 是否进行预处理
-        augment: 是否进行数据增强
     
     返回:
         PyTorch数据加载器
     """
     dataset = OCTDataset(
-        image_dir=image_dir,
-        label_dir=label_dir,
-        preprocess=preprocess,
-        augment=augment
+        images_dir=images_dir,
+        masks_dir=masks_dir,
+        img_size=img_size,
+        preprocess=preprocess
     )
     
     dataloader = DataLoader(
