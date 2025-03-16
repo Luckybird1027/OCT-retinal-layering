@@ -213,7 +213,7 @@ def generate_all_stages_comparison(image_path):
 
 if __name__ == "__main__":
     # 设置图像路径
-    image_path = 'data/RetinalOCT_Dataset/raw/train/DR/dr_train_1003.jpg'
+    image_path = 'data/RetinalOCT_Dataset/raw/train/DR/dr_train_1004.jpg'
 
     if not os.path.exists(image_path):
         print(f"错误：找不到图像文件 {image_path}")

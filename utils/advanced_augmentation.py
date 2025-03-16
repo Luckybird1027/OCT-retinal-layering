@@ -176,6 +176,135 @@ def nsct_enhancement(img, decomp_levels=3, directions=[4, 8, 8]):
     
     return enhanced_img
 
+def rotate_image(img, label=None, max_angle=10):
+    """
+    图像旋转增强
+    
+    参数:
+        img: 输入图像
+        label: 标签图像（如果有）
+        max_angle: 最大旋转角度（度）
+    
+    返回:
+        旋转后的图像和标签
+    """
+    # 随机选择旋转角度
+    angle = np.random.uniform(-max_angle, max_angle)
+    
+    # 获取图像中心点
+    height, width = img.shape[:2]
+    center = (width // 2, height // 2)
+    
+    # 计算旋转矩阵
+    rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    
+    # 应用旋转变换
+    rotated_img = cv2.warpAffine(img, rotation_matrix, (width, height), 
+                                 flags=cv2.INTER_LINEAR, 
+                                 borderMode=cv2.BORDER_CONSTANT,
+                                 borderValue=0)
+    
+    # 如果有标签，同样旋转标签
+    rotated_label = None
+    if label is not None:
+        rotated_label = cv2.warpAffine(label, rotation_matrix, (width, height),
+                                       flags=cv2.INTER_NEAREST,
+                                       borderMode=cv2.BORDER_CONSTANT,
+                                       borderValue=0)
+    
+    return rotated_img, rotated_label
+
+
+def random_crop(img, label=None, crop_ratio=(0.8, 0.95)):
+    """
+    随机裁剪增强
+    
+    参数:
+        img: 输入图像
+        label: 标签图像（如果有）
+        crop_ratio: 裁剪比例范围（相对于原图大小）
+    
+    返回:
+        裁剪后的图像和标签
+    """
+    height, width = img.shape[:2]
+    
+    # 随机选择裁剪比例
+    ratio = np.random.uniform(crop_ratio[0], crop_ratio[1])
+    
+    # 计算裁剪尺寸
+    crop_height = int(height * ratio)
+    crop_width = int(width * ratio)
+    
+    # 随机选择裁剪起始点
+    start_x = np.random.randint(0, width - crop_width + 1)
+    start_y = np.random.randint(0, height - crop_height + 1)
+    
+    # 裁剪图像
+    cropped_img = img[start_y:start_y+crop_height, start_x:start_x+crop_width]
+    
+    # 调整回原始尺寸
+    resized_img = cv2.resize(cropped_img, (width, height), interpolation=cv2.INTER_LINEAR)
+    
+    # 如果有标签，同样裁剪标签
+    resized_label = None
+    if label is not None:
+        cropped_label = label[start_y:start_y+crop_height, start_x:start_x+crop_width]
+        resized_label = cv2.resize(cropped_label, (width, height), interpolation=cv2.INTER_NEAREST)
+    
+    return resized_img, resized_label
+
+
+def horizontal_flip(img, label=None):
+    """
+    水平翻转增强
+    
+    参数:
+        img: 输入图像
+        label: 标签图像（如果有）
+    
+    返回:
+        翻转后的图像和标签
+    """
+    # 水平翻转图像
+    flipped_img = cv2.flip(img, 1)  # 1表示水平翻转
+    
+    # 如果有标签，同样翻转标签
+    flipped_label = None
+    if label is not None:
+        flipped_label = cv2.flip(label, 1)
+    
+    return flipped_img, flipped_label
+
+
+def adjust_brightness_contrast(img, brightness_range=(-0.1, 0.1), contrast_range=(0.8, 1.2)):
+    """
+    亮度和对比度调整
+    
+    参数:
+        img: 输入图像
+        brightness_range: 亮度调整范围
+        contrast_range: 对比度调整范围
+    
+    返回:
+        调整后的图像
+    """
+    # 确保图像在[0,1]范围内
+    if img.max() > 1.0:
+        img = img / 255.0
+    
+    # 随机选择亮度和对比度调整值
+    brightness = np.random.uniform(brightness_range[0], brightness_range[1])
+    contrast = np.random.uniform(contrast_range[0], contrast_range[1])
+    
+    # 应用亮度和对比度调整
+    adjusted = img * contrast + brightness
+    
+    # 裁剪值到[0,1]范围
+    adjusted = np.clip(adjusted, 0, 1)
+    
+    return adjusted
+
 def spatial_domain_augmentation(img, label=None):
     """
     空间域数据增强
@@ -187,22 +316,38 @@ def spatial_domain_augmentation(img, label=None):
     返回:
         增强后的图像和标签
     """
-    # 应用TPS形变
-    if np.random.random() < 0.5:
-        if label is not None:
-            # 将图像和标签堆叠在一起进行同样的变换
-            stacked = np.dstack((img, label))
-            stacked_warped = tps_transform(stacked, regularization=0.3)
-            img_warped = stacked_warped[:, :, 0]
-            label_warped = stacked_warped[:, :, 1]
-        else:
-            img_warped = tps_transform(img, regularization=0.3)
-            label_warped = None
-    else:
-        img_warped = img
-        label_warped = label
+    # 复制输入图像和标签
+    img_aug = img.copy()
+    label_aug = label.copy() if label is not None else None
     
-    return img_warped, label_warped
+    # 1. 随机旋转 (50%概率)
+    if np.random.random() < 0.5:
+        img_aug, label_aug = rotate_image(img_aug, label_aug, max_angle=10)
+    
+    # 2. 随机裁剪 (50%概率)
+    if np.random.random() < 0.5:
+        img_aug, label_aug = random_crop(img_aug, label_aug)
+    
+    # 3. 随机水平翻转 (50%概率)
+    if np.random.random() < 0.5:
+        img_aug, label_aug = horizontal_flip(img_aug, label_aug)
+    
+    # 4. 应用TPS形变 (50%概率)
+    if np.random.random() < 0.5:
+        if label_aug is not None:
+            # 将图像和标签堆叠在一起进行同样的变换
+            stacked = np.dstack((img_aug, label_aug))
+            stacked_warped = tps_transform(stacked, regularization=0.3)
+            img_aug = stacked_warped[:, :, 0]
+            label_aug = stacked_warped[:, :, 1]
+        else:
+            img_aug = tps_transform(img_aug, regularization=0.3)
+    
+    # 5. 亮度和对比度调整 (50%概率)
+    if np.random.random() < 0.5:
+        img_aug = adjust_brightness_contrast(img_aug)
+    
+    return img_aug, label_aug
 
 def intensity_domain_augmentation(img):
     """
