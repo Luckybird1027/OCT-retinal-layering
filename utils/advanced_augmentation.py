@@ -57,63 +57,6 @@ def tps_transform(img, num_control_points=16, std_dev=10, regularization=0.3):
     
     return warped_img
 
-def perspective_transform(img, angle_range=3):
-    """
-    受控透视变换
-    
-    参数:
-        img: 输入图像
-        angle_range: 投影矩阵扰动范围（度）
-    
-    返回:
-        透视变换后的图像
-    """
-    rows, cols = img.shape
-    
-    # 随机角度（±angle_range度）
-    angle_x = np.random.uniform(-angle_range, angle_range) * np.pi / 180
-    angle_y = np.random.uniform(-angle_range, angle_range) * np.pi / 180
-    angle_z = np.random.uniform(-angle_range, angle_range) * np.pi / 180
-    
-    # 创建透视变换矩阵
-    # 旋转矩阵
-    Rx = np.array([
-        [1, 0, 0],
-        [0, np.cos(angle_x), -np.sin(angle_x)],
-        [0, np.sin(angle_x), np.cos(angle_x)]
-    ])
-    
-    Ry = np.array([
-        [np.cos(angle_y), 0, np.sin(angle_y)],
-        [0, 1, 0],
-        [-np.sin(angle_y), 0, np.cos(angle_y)]
-    ])
-    
-    Rz = np.array([
-        [np.cos(angle_z), -np.sin(angle_z), 0],
-        [np.sin(angle_z), np.cos(angle_z), 0],
-        [0, 0, 1]
-    ])
-    
-    R = np.dot(Rz, np.dot(Ry, Rx))
-    
-    # 创建透视变换矩阵
-    d = 500  # 相机距离
-    f = 500  # 焦距
-    
-    K = np.array([
-        [f, 0, cols/2],
-        [0, f, rows/2],
-        [0, 0, 1]
-    ])
-    
-    P = np.dot(K, R)
-    
-    # 应用透视变换
-    warped_img = cv2.warpPerspective(img, P, (cols, rows))
-    
-    return warped_img
-
 def dynamic_gamma_correction(img, gamma_range=(0.6, 1.8)):
     """
     动态Gamma校正
@@ -258,17 +201,6 @@ def spatial_domain_augmentation(img, label=None):
     else:
         img_warped = img
         label_warped = label
-    
-    # 应用受控透视变换
-    if np.random.random() < 0.5:
-        if label_warped is not None:
-            # 确保图像和标签使用相同的变换
-            stacked = np.dstack((img_warped, label_warped))
-            stacked_warped = perspective_transform(stacked)
-            img_warped = stacked_warped[:, :, 0]
-            label_warped = stacked_warped[:, :, 1]
-        else:
-            img_warped = perspective_transform(img_warped)
     
     return img_warped, label_warped
 

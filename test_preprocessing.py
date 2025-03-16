@@ -12,7 +12,6 @@ from utils.advanced_preprocess import (
 )
 from utils.advanced_augmentation import (
     tps_transform,
-    perspective_transform,
     dynamic_gamma_correction,
     mixed_noise_injection,
     nsct_enhancement,
@@ -129,32 +128,28 @@ def test_augmentation(img):
     print("正在应用TPS形变...")
     img_tps = tps_transform(img, regularization=0.3)
 
-    # 2. 测试透视变换
-    print("正在应用透视变换...")
-    img_perspective = perspective_transform(img)
-
-    # 3. 测试伽马校正
+    # 2. 测试伽马校正
     print("正在应用伽马校正...")
     img_gamma = dynamic_gamma_correction(img, gamma_range=(0.6, 1.8))
 
-    # 4. 测试混合噪声注入
+    # 3. 测试混合噪声注入
     print("正在应用混合噪声注入...")
     img_noise = mixed_noise_injection(img)
 
-    # 5. 测试频域增强
+    # 4. 测试频域增强
     print("正在应用频域增强...")
     img_freq = nsct_enhancement(img)
 
-    # 6. 测试完整的增强流程
+    # 5. 测试完整的增强流程
     print("正在应用完整增强流程...")
     img_aug, _ = advanced_augmentation(img)
 
     # 显示增强结果
     print("正在生成增强对比图...")
-    # 空间变换对比
+    # 更新空间变换对比图
     spatial_fig = plot_comparison(
-        [img, img_tps, img_perspective],
-        ["原始图像", "TPS形变", "透视变换"],
+        [img, img_tps],
+        ["原始图像", "TPS形变"],
         "OCT图像空间变换效果对比"
     )
     spatial_fig.savefig("./chart/spatial_augmentation_comparison.png", dpi=300)
@@ -218,7 +213,7 @@ def generate_all_stages_comparison(image_path):
 
 if __name__ == "__main__":
     # 设置图像路径
-    image_path = 'data/RetinalOCT_Dataset/raw/train/DR/dr_train_1001.jpg'
+    image_path = 'data/RetinalOCT_Dataset/raw/train/DR/dr_train_1003.jpg'
 
     if not os.path.exists(image_path):
         print(f"错误：找不到图像文件 {image_path}")
