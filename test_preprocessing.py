@@ -78,7 +78,7 @@ def test_preprocessing(image_path):
 
     # 4. 测试巴特沃斯高通滤波器
     print("正在应用巴特沃斯高通滤波器...")
-    img_hp = butterworth_highpass_filter(img_pc, cutoff=0.4, order=5)
+    img_hp = butterworth_highpass_filter(img_pc)
 
     # 5. 测试完整的高级预处理流程
     print("正在应用完整预处理流程...")

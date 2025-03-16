@@ -124,7 +124,7 @@ def phase_congruency_enhancement(img, threshold=0.45, nscale=4):
     return enhanced
 
 
-def butterworth_highpass_filter(img, cutoff=0.4, order=5):
+def butterworth_highpass_filter(img, cutoff=0.08, order=1):
     """
     巴特沃斯高通滤波器 - 提升高频细节响应
     
@@ -161,8 +161,8 @@ def butterworth_highpass_filter(img, cutoff=0.4, order=5):
     img_filtered = (img_filtered - np.min(img_filtered)) / (np.max(img_filtered) - np.min(img_filtered))
 
     # 与原图组合
-    alpha = 0.7  # 原图权重
-    beta = 0.3  # 高频细节权重
+    alpha = 0.5  # 原图权重
+    beta = 0.5  # 高频细节权重
     combined = alpha * img + beta * img_filtered
 
     # 归一化
@@ -207,6 +207,6 @@ def advanced_enhancement(img):
     img_pc = phase_congruency_enhancement(img, threshold=0.45, nscale=4)
 
     # 步骤2：巴特沃斯高通滤波器提升高频细节响应
-    img_enhanced = butterworth_highpass_filter(img_pc, cutoff=0.4, order=5)
+    img_enhanced = butterworth_highpass_filter(img_pc)
 
     return img_enhanced
