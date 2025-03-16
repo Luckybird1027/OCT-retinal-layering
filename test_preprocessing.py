@@ -12,6 +12,10 @@ from utils.advanced_preprocess import (
 )
 from utils.advanced_augmentation import (
     tps_transform,
+    rotate_image,
+    random_crop,
+    horizontal_flip,
+    adjust_brightness_contrast,
     dynamic_gamma_correction,
     mixed_noise_injection,
     nsct_enhancement,
@@ -127,37 +131,53 @@ def test_augmentation(img):
     # 1. 测试TPS形变
     print("正在应用TPS形变...")
     img_tps = tps_transform(img, regularization=0.3)
+    
+    # 2. 测试旋转
+    print("正在应用图像旋转...")
+    img_rotated, _ = rotate_image(img, max_angle=10)
+    
+    # 3. 测试裁剪
+    print("正在应用随机裁剪...")
+    img_cropped, _ = random_crop(img)
+    
+    # 4. 测试水平翻转
+    print("正在应用水平翻转...")
+    img_flipped, _ = horizontal_flip(img)
+    
+    # 5. 测试亮度和对比度调整
+    print("正在应用亮度和对比度调整...")
+    img_adjusted = adjust_brightness_contrast(img)
 
-    # 2. 测试伽马校正
+    # 6. 测试伽马校正
     print("正在应用伽马校正...")
     img_gamma = dynamic_gamma_correction(img, gamma_range=(0.6, 1.8))
 
-    # 3. 测试混合噪声注入
+    # 7. 测试混合噪声注入
     print("正在应用混合噪声注入...")
     img_noise = mixed_noise_injection(img)
 
-    # 4. 测试频域增强
+    # 8. 测试频域增强
     print("正在应用频域增强...")
     img_freq = nsct_enhancement(img)
 
-    # 5. 测试完整的增强流程
+    # 9. 测试完整的增强流程
     print("正在应用完整增强流程...")
     img_aug, _ = advanced_augmentation(img)
 
     # 显示增强结果
     print("正在生成增强对比图...")
-    # 更新空间变换对比图
+    # 空间变换对比
     spatial_fig = plot_comparison(
-        [img, img_tps],
-        ["原始图像", "TPS形变"],
+        [img, img_tps, img_rotated, img_cropped, img_flipped],
+        ["原始图像", "TPS形变", "旋转", "裁剪", "水平翻转"],
         "OCT图像空间变换效果对比"
     )
     spatial_fig.savefig("./chart/spatial_augmentation_comparison.png", dpi=300)
 
     # 强度变换对比
     intensity_fig = plot_comparison(
-        [img, img_gamma, img_noise],
-        ["原始图像", "伽马校正", "混合噪声注入"],
+        [img, img_adjusted, img_gamma, img_noise],
+        ["原始图像", "亮度对比度调整", "伽马校正", "混合噪声注入"],
         "OCT图像强度变换效果对比"
     )
     intensity_fig.savefig("./chart/intensity_augmentation_comparison.png", dpi=300)
