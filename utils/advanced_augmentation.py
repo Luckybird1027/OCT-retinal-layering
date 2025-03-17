@@ -466,8 +466,6 @@ def advanced_augmentation(img, label=None, target_size=(760, 984)):
     返回:
         增强后的图像和标签
     """
-    # 0. 标准化尺寸
-    img, label = standardize_size(img, label, target_size)
 
     # 1. 空间域增强
     img_aug, label_aug = spatial_domain_augmentation(img, label)

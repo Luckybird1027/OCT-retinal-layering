@@ -5,12 +5,18 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-# import albumentations as A
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import torchvision
 
 from model.unet import UNet
 from utils.dataset import OCTDataset
+from utils.advanced_augmentation import advanced_augmentation
+
+# 设置matplotlib支持中文
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
 
 # 设置随机种子以确保可重复性
 def set_seed(seed=42):
@@ -40,17 +46,30 @@ def dice_coefficient(pred, target, epsilon=1e-6):
     # 计算平均Dice系数
     return torch.tensor(dice_scores).mean()
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, device, num_epochs=30, save_dir='checkpoints'):
+# 自定义数据增强转换
+class CustomTransform:
+    def __init__(self, apply_prob=0.5):
+        self.apply_prob = apply_prob
+        
+    def __call__(self, image, mask=None):
+        if random.random() < self.apply_prob:
+            image, mask = advanced_augmentation(image, mask)
+        return {'image': image, 'mask': mask}
+
+def train_model(model, train_loader, test_loader, criterion, optimizer, device, num_epochs=30, save_dir='checkpoints'):
     # 创建保存检查点的目录
     os.makedirs(save_dir, exist_ok=True)
     
+    # 创建TensorBoard的SummaryWriter
+    writer = SummaryWriter(os.path.join(save_dir, 'logs'))
+    
     # 记录训练过程
     train_losses = []
-    val_losses = []
+    test_losses = []
     train_dices = []
-    val_dices = []
+    test_dices = []
     
-    best_val_dice = 0.0
+    best_test_dice = 0.0
     
     for epoch in range(num_epochs):
         # 训练阶段
@@ -87,12 +106,12 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
         
         # 验证阶段
         model.eval()
-        val_loss = 0.0
-        val_dice = 0.0
+        test_loss = 0.0
+        test_dice = 0.0
         
-        val_pbar = tqdm(val_loader, desc=f'Epoch {epoch+1}/{num_epochs} [Val]')
+        test_pbar = tqdm(test_loader, desc=f'Epoch {epoch+1}/{num_epochs} [Test]')
         with torch.no_grad():
-            for images, masks in val_pbar:
+            for images, masks in test_pbar:
                 images = images.to(device)
                 masks = masks.to(device)
                 
@@ -101,28 +120,64 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
                 loss = criterion(outputs, masks)
                 
                 # 计算指标
-                val_loss += loss.item()
+                test_loss += loss.item()
                 dice = dice_coefficient(outputs, masks)
-                val_dice += dice.item()
+                test_dice += dice.item()
                 
-                val_pbar.set_postfix({'loss': loss.item(), 'dice': dice.item()})
+                test_pbar.set_postfix({'loss': loss.item(), 'dice': dice.item()})
         
         # 计算平均损失和Dice系数
-        val_loss /= len(val_loader)
-        val_dice /= len(val_loader)
-        val_losses.append(val_loss)
-        val_dices.append(val_dice)
+        test_loss /= len(test_loader)
+        test_dice /= len(test_loader)
+        test_losses.append(test_loss)
+        test_dices.append(test_dice)
+        
+        # 记录到TensorBoard
+        writer.add_scalar('Loss/train', train_loss, epoch)
+        writer.add_scalar('Loss/test', test_loss, epoch)
+        writer.add_scalar('Dice/train', train_dice, epoch)
+        writer.add_scalar('Dice/test', test_dice, epoch)
+        
+        # 每隔几个epoch记录一些图像到TensorBoard
+        if epoch % 5 == 0:
+            # 获取一个批次的图像和预测结果
+            images, masks = next(iter(test_loader))
+            images = images.to(device)
+            with torch.no_grad():
+                outputs = model(images)
+                predictions = torch.argmax(outputs, dim=1)
+            
+            # 添加原始图像、真实标签和预测结果到TensorBoard
+            img_grid = torchvision.utils.make_grid(images[:4], normalize=True)
+            writer.add_image('Images', img_grid, epoch)
+            
+            # 创建彩色标签和预测图
+            mask_color = torch.zeros(4, 3, masks.size(2), masks.size(3))
+            pred_color = torch.zeros(4, 3, predictions.size(1), predictions.size(2))
+            
+            for i in range(4):
+                for c in range(10):
+                    # 使用不同颜色表示不同类别
+                    color = torch.tensor([c/10, (10-c)/10, c%2])
+                    mask_color[i, :, masks[i] == c] = color.view(3, 1)
+                    pred_color[i, :, predictions[i] == c] = color.view(3, 1)
+            
+            mask_grid = torchvision.utils.make_grid(mask_color)
+            pred_grid = torchvision.utils.make_grid(pred_color)
+            
+            writer.add_image('Masks/True', mask_grid, epoch)
+            writer.add_image('Masks/Predicted', pred_grid, epoch)
         
         # 保存最佳模型
-        if val_dice > best_val_dice:
-            best_val_dice = val_dice
+        if test_dice > best_test_dice:
+            best_test_dice = test_dice
             torch.save(model.state_dict(), os.path.join(save_dir, 'best_model.pth'))
-            print(f'Saved best model with Dice score: {best_val_dice:.4f}')
+            print(f'保存最佳模型，Dice分数: {best_test_dice:.4f}')
         
         # 打印当前epoch的结果
         print(f'Epoch {epoch+1}/{num_epochs}:')
-        print(f'  Train Loss: {train_loss:.4f}, Train Dice: {train_dice:.4f}')
-        print(f'  Val Loss: {val_loss:.4f}, Val Dice: {val_dice:.4f}')
+        print(f'  训练损失: {train_loss:.4f}, 训练Dice: {train_dice:.4f}')
+        print(f'  验证损失: {test_loss:.4f}, 验证Dice: {test_dice:.4f}')
         
         # 每个epoch保存一次模型
         torch.save({
@@ -130,10 +185,13 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'train_loss': train_loss,
-            'val_loss': val_loss,
+            'test_loss': test_loss,
             'train_dice': train_dice,
-            'val_dice': val_dice,
+            'test_dice': test_dice,
         }, os.path.join(save_dir, f'model_epoch_{epoch+1}.pth'))
+    
+    # 关闭TensorBoard的SummaryWriter
+    writer.close()
     
     # 保存最终模型
     torch.save(model.state_dict(), os.path.join(save_dir, 'final_model.pth'))
@@ -142,18 +200,18 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
     plt.figure(figsize=(12, 5))
     
     plt.subplot(1, 2, 1)
-    plt.plot(train_losses, label='Train Loss')
-    plt.plot(val_losses, label='Val Loss')
+    plt.plot(train_losses, label='训练损失')
+    plt.plot(test_losses, label='测试损失')
     plt.xlabel('Epoch')
-    plt.ylabel('Loss')
+    plt.ylabel('损失')
     plt.legend()
-    plt.title('Loss vs. Epoch')
+    plt.title('损失 vs. Epoch')
     
     plt.subplot(1, 2, 2)
-    plt.plot(train_dices, label='Train Dice')
-    plt.plot(val_dices, label='Val Dice')
+    plt.plot(train_dices, label='训练Dice')
+    plt.plot(test_dices, label='测试Dice')
     plt.xlabel('Epoch')
-    plt.ylabel('Dice Coefficient')
+    plt.ylabel('Dice系数')
     plt.legend()
     plt.title('Dice vs. Epoch')
     
@@ -169,27 +227,23 @@ def main():
     
     # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'Using device: {device}')
+    print(f'使用设备: {device}')
     
     # 设置数据路径
     train_images_dir = 'data/RetinalOCT_Dataset/processed/train/images'
     train_masks_dir = 'data/RetinalOCT_Dataset/processed/train/masks'
-    val_images_dir = 'data/RetinalOCT_Dataset/processed/val/images'
-    val_masks_dir = 'data/RetinalOCT_Dataset/processed/val/masks'
+    test_images_dir = 'data/RetinalOCT_Dataset/processed/test/images'
+    test_masks_dir = 'data/RetinalOCT_Dataset/processed/test/masks'
     
-    # 数据增强
-    train_transform = A.Compose([
-        A.HorizontalFlip(p=0.5),
-        A.RandomBrightnessContrast(p=0.5),
-        A.GaussNoise(p=0.3),
-    ])
+    # 使用自定义数据增强
+    train_transform = CustomTransform(apply_prob=0.5)
     
     # 创建数据集和数据加载器
     train_dataset = OCTDataset(train_images_dir, train_masks_dir, transform=train_transform)
-    val_dataset = OCTDataset(val_images_dir, val_masks_dir, transform=None)
+    test_dataset = OCTDataset(test_images_dir, test_masks_dir, transform=None)
     
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=4)
+    test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False, num_workers=4)
     
     # 创建模型
     model = UNet(in_channels=1, out_channels=10).to(device)
@@ -202,7 +256,7 @@ def main():
     model = train_model(
         model=model,
         train_loader=train_loader,
-        val_loader=val_loader,
+        test_loader=test_loader,
         criterion=criterion,
         optimizer=optimizer,
         device=device,
@@ -210,7 +264,7 @@ def main():
         save_dir='checkpoints'
     )
     
-    print('Training completed!')
+    print('训练完成!')
 
 if __name__ == '__main__':
     main()

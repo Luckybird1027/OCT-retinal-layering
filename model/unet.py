@@ -5,7 +5,7 @@ import torch.nn.functional as F
 class UNet(nn.Module):
     def __init__(self, in_channels=1, out_channels=10):
         super(UNet, self).__init__()
-        
+
         # 编码器部分
         self.enc1 = self._make_encoder_block(in_channels, 64)
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)

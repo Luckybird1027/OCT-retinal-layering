@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from utils.advanced_preprocess import advanced_denoising, advanced_enhancement
+from utils.advanced_augmentation import standardize_size
 
 class OCTDataset(Dataset):
     def __init__(self, images_dir, masks_dir, img_size=(984, 760), transform=None, preprocess=True):
@@ -30,9 +31,8 @@ class OCTDataset(Dataset):
         img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
         
-        # 确保图像尺寸一致
-        img = cv2.resize(img, (self.img_size[1], self.img_size[0]), interpolation=cv2.INTER_LINEAR)
-        mask = cv2.resize(mask, (self.img_size[1], self.img_size[0]), interpolation=cv2.INTER_NEAREST)
+        # 标准化尺寸（保持长宽比的缩放+中心裁剪）
+        img, mask = standardize_size(img, mask, target_size=self.img_size)
         
         # 标准化图像
         img = img / 255.0
