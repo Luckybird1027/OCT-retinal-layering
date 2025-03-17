@@ -174,3 +174,4 @@ cython_debug/
 .cursor/rules/*
 data/*
 chart/*
+train/*

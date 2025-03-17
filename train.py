@@ -230,10 +230,10 @@ def main():
     print(f'使用设备: {device}')
     
     # 设置数据路径
-    train_images_dir = 'data/RetinalOCT_Dataset/processed/train/images'
-    train_masks_dir = 'data/RetinalOCT_Dataset/processed/train/masks'
-    test_images_dir = 'data/RetinalOCT_Dataset/processed/test/images'
-    test_masks_dir = 'data/RetinalOCT_Dataset/processed/test/masks'
+    train_images_dir = 'data/SJTU/train/img'
+    train_masks_dir = 'data/SJTU/train/mask'
+    test_images_dir = 'data/SJTU/test/img'
+    test_masks_dir = 'data/SJTU/test/mask'
     
     # 使用自定义数据增强
     train_transform = CustomTransform(apply_prob=0.5)
@@ -242,8 +242,8 @@ def main():
     train_dataset = OCTDataset(train_images_dir, train_masks_dir, transform=train_transform)
     test_dataset = OCTDataset(test_images_dir, test_masks_dir, transform=None)
     
-    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
-    test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=4)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4)
     
     # 创建模型
     model = UNet(in_channels=1, out_channels=10).to(device)
@@ -261,7 +261,7 @@ def main():
         optimizer=optimizer,
         device=device,
         num_epochs=30,
-        save_dir='checkpoints'
+        save_dir='train/checkpoints'
     )
     
     print('训练完成!')

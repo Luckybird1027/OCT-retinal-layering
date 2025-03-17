@@ -18,7 +18,7 @@ def tps_transform(img, num_control_points=16, std_dev=10, regularization=0.3):
     返回:
         形变后的图像
     """
-    rows, cols = img.shape
+    rows, cols, _ = img.shape
 
     # 创建控制点网格
     src_points = np.zeros((num_control_points, 2), dtype=np.float32)
@@ -352,6 +352,10 @@ def spatial_domain_augmentation(img, label=None):
     if np.random.random() < 0.5:
         img_aug = adjust_brightness_contrast(img_aug)
 
+    # 6. 将标签转换为整数类型 (如果有标签)
+    if label_aug is not None:
+        label_aug = np.rint(label_aug).astype(np.uint8)
+
     return img_aug, label_aug
 
 
@@ -393,7 +397,7 @@ def frequency_domain_augmentation(img):
     return img
 
 
-def standardize_size(img, label=None, target_size=(760, 984)):
+def standardize_size(img, label=None, target_size=(720, 992)):
     """
     将图像标准化为固定尺寸（保持长宽比的缩放+中心裁剪）
     
@@ -451,10 +455,14 @@ def standardize_size(img, label=None, target_size=(760, 984)):
         final_label = np.zeros(target_size, dtype=label.dtype)
         final_label[place_y:place_y + crop_h, place_x:place_x + crop_w] = cropped_label
 
+        # 转换为整型标签
+        if final_label is not None:
+            final_label = final_label.astype(np.uint8)
+
     return final_img, final_label
 
 
-def advanced_augmentation(img, label=None, target_size=(760, 984)):
+def advanced_augmentation(img, label=None):
     """
     三维空间-频域联合增强框架
     
