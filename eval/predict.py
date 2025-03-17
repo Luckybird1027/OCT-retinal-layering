@@ -10,7 +10,7 @@ from model.unet import UNet
 from utils.dataset import OCTDataset
 from utils.advanced_preprocess import advanced_denoising, advanced_enhancement
 
-def generate_color_map(num_classes=10):
+def generate_color_map(num_classes=11):
     """生成用于可视化的颜色映射"""
     color_map = np.zeros((num_classes, 3), dtype=np.uint8)
     
@@ -28,6 +28,7 @@ def generate_color_map(num_classes=10):
     color_map[7] = [128, 0, 0]      # 深红色 - IS/OS
     color_map[8] = [0, 128, 0]      # 深绿色 - RPE
     color_map[9] = [0, 0, 128]      # 深蓝色 - Choroid
+    color_map[10] = [128, 128, 0]    # 深黄色 - VE
     
     return color_map
 
@@ -132,7 +133,7 @@ def evaluate_test_set(model, test_loader, device, output_dir='results'):
             
             # 计算Dice系数
             dice_score = 0.0
-            for class_idx in range(10):
+            for class_idx in range(11):
                 pred_class = (pred == class_idx).float()
                 mask_class = (mask == class_idx).float()
                 
@@ -142,7 +143,7 @@ def evaluate_test_set(model, test_loader, device, output_dir='results'):
                 if union > 0:
                     dice_score += (2 * intersection) / (union + 1e-6)
             
-            dice_score /= 10  # 10个类别的平均值
+            dice_score /= 11  # 11个类别的平均值
             dice_scores.append(dice_score.item())
             
             # 保存第一个批次的一些示例结果
@@ -200,7 +201,7 @@ def main():
     print(f'使用设备: {device}')
     
     # 加载模型
-    model = UNet(in_channels=1, out_channels=10).to(device)
+    model = UNet(in_channels=1, out_channels=11).to(device)
     model.load_state_dict(torch.load('checkpoints/best_model.pth', map_location=device))
     
     # 设置测试数据
