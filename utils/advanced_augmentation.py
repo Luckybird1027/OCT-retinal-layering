@@ -18,7 +18,7 @@ def tps_transform(img, num_control_points=16, std_dev=10, regularization=0.3):
     返回:
         形变后的图像
     """
-    rows, cols, _ = img.shape
+    rows, cols = img.shape
 
     # 创建控制点网格
     src_points = np.zeros((num_control_points, 2), dtype=np.float32)

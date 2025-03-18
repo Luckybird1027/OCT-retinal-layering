@@ -6,7 +6,7 @@ from scipy import ndimage
 from scipy.fftpack import fft2, ifft2, fftshift, ifftshift
 
 
-def anisotropic_diffusion(img, niter=5, kappa=0.15, gamma=0.2, option=1):
+def anisotropic_diffusion(img, niter=5, kappa=0.15, gamma=0.15, option=1):
     """
     各向异性扩散 - 实现散斑噪声抑制
     

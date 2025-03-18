@@ -13,7 +13,7 @@ from utils.advanced_augmentation import (
     dynamic_gamma_correction,
     mixed_noise_injection,
     nsct_enhancement,
-    advanced_augmentation
+    advanced_augmentation, spatial_domain_augmentation
 )
 from utils.advanced_preprocess import (
     anisotropic_diffusion,
@@ -27,6 +27,7 @@ from utils.advanced_preprocess import (
 # 设置matplotlib支持中文
 plt.rcParams['font.sans-serif'] = ['SimHei']
 plt.rcParams['axes.unicode_minus'] = False
+
 
 def plot_comparison(images, titles, main_title="OCT图像处理效果对比", figsize=(15, 10)):
     """
@@ -55,22 +56,21 @@ def plot_comparison(images, titles, main_title="OCT图像处理效果对比", fi
     return fig
 
 
-def test_preprocessing(image_path):
+def test_preprocessing(img):
     """
     测试OCT图像预处理流程
     
     参数:
-        image_path: 图像路径
+        img: OCT图像
     """
-    # 加载图像
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
-    # 归一化
-    img_norm = (img - np.min(img)) / (np.max(img) - np.min(img))
+    # 确保图像在[0,1]范围内
+    if img.max() > 1.0:
+        img = img / 255.0
 
     # 1. 测试各向异性扩散
     print("正在应用各向异性扩散...")
-    img_ad = anisotropic_diffusion(img_norm)
+    img_ad = anisotropic_diffusion(img)
 
     # 2. 测试BM3D去噪
     print("正在应用BM3D去噪...")
@@ -86,14 +86,14 @@ def test_preprocessing(image_path):
 
     # 5. 测试完整的高级预处理流程
     print("正在应用完整预处理流程...")
-    img_denoised = advanced_denoising(img_norm)
-    img_enhanced = advanced_enhancement(img_denoised)
+    img_denoised = advanced_denoising(img)
+    img_processed = advanced_enhancement(img_denoised)
 
     # 显示预处理结果
     print("正在生成预处理对比图...")
     # 去噪步骤对比
     denoising_fig = plot_comparison(
-        [img_norm, img_ad, img_bm3d],
+        [img, img_ad, img_bm3d],
         ["原始图像", "各向异性扩散", "BM3D去噪"],
         "OCT图像去噪效果对比"
     )
@@ -109,61 +109,64 @@ def test_preprocessing(image_path):
 
     # 完整流程对比
     complete_fig = plot_comparison(
-        [img_norm, img_denoised, img_enhanced],
+        [img, img_denoised, img_processed],
         ["原始图像", "去噪结果", "增强结果"],
         "OCT图像完整预处理流程对比"
     )
     complete_fig.savefig("./chart/complete_preprocessing_comparison.png", dpi=300)
 
-    return img_norm, img_enhanced
+    return img, img_processed
 
 
-def test_augmentation(img):
+def test_augmentation(image_path):
     """
     测试OCT图像增强流程
     
     参数:
-        img: 输入图像
+        image_path: OCT图像路径
     """
-    # 确保图像在[0,1]范围内
-    if img.max() > 1.0:
-        img = img / 255.0
+
+    # 加载图像
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+
+    # 归一化
+    img_norm = (img - np.min(img)) / (np.max(img) - np.min(img))
 
     # 1. 测试TPS形变
     print("正在应用TPS形变...")
-    img_tps = tps_transform(img, regularization=0.3)
-    
+    img_tps = tps_transform(img_norm, regularization=0.3)
+
     # 2. 测试旋转
     print("正在应用图像旋转...")
-    img_rotated, _ = rotate_image(img, max_angle=10)
-    
+    img_rotated, _ = rotate_image(img_norm, max_angle=10)
+
     # 3. 测试裁剪
     print("正在应用随机裁剪...")
-    img_cropped, _ = random_crop(img)
-    
+    img_cropped, _ = random_crop(img_norm)
+
     # 4. 测试水平翻转
     print("正在应用水平翻转...")
-    img_flipped, _ = horizontal_flip(img)
-    
+    img_flipped, _ = horizontal_flip(img_norm)
+
     # 5. 测试亮度和对比度调整
     print("正在应用亮度和对比度调整...")
-    img_adjusted = adjust_brightness_contrast(img)
+    img_adjusted = adjust_brightness_contrast(img_norm)
 
     # 6. 测试伽马校正
     print("正在应用伽马校正...")
-    img_gamma = dynamic_gamma_correction(img, gamma_range=(0.6, 1.8))
+    img_gamma = dynamic_gamma_correction(img_norm, gamma_range=(0.6, 1.8))
 
     # 7. 测试混合噪声注入
     print("正在应用混合噪声注入...")
-    img_noise = mixed_noise_injection(img)
+    img_noise = mixed_noise_injection(img_norm)
 
     # 8. 测试频域增强
     print("正在应用频域增强...")
-    img_freq = nsct_enhancement(img)
+    img_freq = nsct_enhancement(img_norm)
 
     # 9. 测试完整的增强流程
     print("正在应用完整增强流程...")
-    img_aug, _ = advanced_augmentation(img)
+    img_aug, _ = advanced_augmentation(img_norm)
 
     # 显示增强结果
     print("正在生成增强对比图...")
@@ -191,6 +194,9 @@ def test_augmentation(img):
     )
     complete_aug_fig.savefig("./chart/complete_augmentation_comparison.png", dpi=300)
 
+    enhanced_img, _ = spatial_domain_augmentation(img_norm)
+    return enhanced_img
+
 
 def generate_all_stages_comparison(image_path):
     """
@@ -205,16 +211,16 @@ def generate_all_stages_comparison(image_path):
 
     # 分别应用每个处理步骤
     print("正在生成所有处理阶段的对比图...")
-    img_ad = anisotropic_diffusion(img_norm)
+    img_aug, _ = advanced_augmentation(img_norm)
+    img_ad = anisotropic_diffusion(img_aug)
     img_bm3d = bm3d_denoising(img_ad)
     img_pc = phase_congruency_enhancement(img_bm3d)
     img_hp = butterworth_highpass_filter(img_pc)
-    img_aug, _ = advanced_augmentation(img_hp)
 
     # 生成完整处理流程对比图
-    stages = [img_norm, img_ad, img_bm3d, img_pc, img_hp, img_aug]
-    titles = ["原始图像", "各向异性扩散", "BM3D去噪",
-              "相位一致性增强", "高通滤波增强", "数据增强结果"]
+    stages = [img_norm, img_aug, img_ad, img_bm3d, img_pc, img_hp]
+    titles = ["原始图像", "数据增强结果", "各向异性扩散", "BM3D去噪",
+              "相位一致性增强处理", "高通滤波增强处理"]
 
     # 创建3x2网格布局
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
@@ -240,13 +246,13 @@ if __name__ == "__main__":
         print(f"错误：找不到图像文件 {image_path}")
         exit(1)
 
-    # 测试预处理
-    print("\n===== 开始测试预处理效果 =====")
-    img_norm, img_enhanced = test_preprocessing(image_path)
-
     # 测试数据增强
     print("\n===== 开始测试数据增强效果 =====")
-    test_augmentation(img_enhanced)
+    enhanced_img = test_augmentation(image_path)
+
+    # 测试预处理
+    print("\n===== 开始测试预处理效果 =====")
+    img_norm, img_processed = test_preprocessing(enhanced_img)
 
     # 生成完整流程对比图
     print("\n===== 生成完整处理流程对比图 =====")
