@@ -60,7 +60,7 @@ class CustomTransform:
         return {'image': image, 'mask': mask}
 
 
-def train_model(model, train_loader, test_loader, criterion, optimizer, device, num_epochs=30, save_dir='checkpoints'):
+def train_model(model, train_loader, val_loader, criterion, optimizer, device, num_epochs=30, save_dir='checkpoints'):
     # 创建保存检查点的目录
     os.makedirs(save_dir, exist_ok=True)
 
@@ -69,11 +69,11 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, device, 
 
     # 记录训练过程
     train_losses = []
-    test_losses = []
+    val_losses = []
     train_dices = []
-    test_dices = []
+    val_dices = []
 
-    best_test_dice = 0.0
+    best_val_dice = 0.0
 
     for epoch in range(num_epochs):
         # 训练阶段
@@ -108,14 +108,14 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, device, 
         train_losses.append(train_loss)
         train_dices.append(train_dice)
 
-        # 测试阶段
+        # 评估阶段
         model.eval()
-        test_loss = 0.0
-        test_dice = 0.0
+        val_loss = 0.0
+        val_dice = 0.0
 
-        test_pbar = tqdm(test_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Test]')
+        val_pbar = tqdm(val_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Val]')
         with torch.no_grad():
-            for images, masks in test_pbar:
+            for images, masks in val_pbar:
                 images = images.to(device)
                 masks = masks.to(device)
 
@@ -124,27 +124,27 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, device, 
                 loss = criterion(outputs, masks)
 
                 # 计算指标
-                test_loss += loss.item()
+                val_loss += loss.item()
                 dice = dice_coefficient(outputs, masks)
-                test_dice += dice.item()
+                val_dice += dice.item()
 
-                test_pbar.set_postfix({'loss': loss.item(), 'dice': dice.item()})
+                val_pbar.set_postfix({'loss': loss.item(), 'dice': dice.item()})
 
         # 计算平均损失和Dice系数
-        test_loss /= len(test_loader)
-        test_dice /= len(test_loader)
-        test_losses.append(test_loss)
-        test_dices.append(test_dice)
+        val_loss /= len(val_loader)
+        val_dice /= len(val_loader)
+        val_losses.append(val_loss)
+        val_dices.append(val_dice)
 
         # 记录到TensorBoard
         writer.add_scalar('Loss/train', train_loss, epoch)
-        writer.add_scalar('Loss/test', test_loss, epoch)
+        writer.add_scalar('Loss/val', val_loss, epoch)
         writer.add_scalar('Dice/train', train_dice, epoch)
-        writer.add_scalar('Dice/test', test_dice, epoch)
+        writer.add_scalar('Dice/val', val_dice, epoch)
 
         # 每个 Epoch 记录一些图像到 TensorBoard
         # 获取一个批次的图像和预测结果
-        images, masks = next(iter(test_loader))
+        images, masks = next(iter(val_loader))
         images = images.to(device)
         with torch.no_grad():
             outputs = model(images)
@@ -187,15 +187,15 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, device, 
         writer.add_image('Combined/Image_Mask_Prediction_Gray', combined_grid, epoch)
 
         # 保存最佳模型
-        if test_dice > best_test_dice:
-            best_test_dice = test_dice
+        if val_dice > best_val_dice:
+            best_val_dice = val_dice
             torch.save(model.state_dict(), os.path.join(save_dir, 'best_model.pth'))
-            print(f'保存最佳模型，Dice分数: {best_test_dice:.4f}')
+            print(f'保存最佳模型，Dice分数: {best_val_dice:.4f}')
 
         # 打印当前epoch的结果
         print(f'Epoch {epoch + 1}/{num_epochs}:')
         print(f'  训练损失: {train_loss:.4f}, 训练Dice: {train_dice:.4f}')
-        print(f'  验证损失: {test_loss:.4f}, 验证Dice: {test_dice:.4f}')
+        print(f'  验证损失: {val_loss:.4f}, 验证Dice: {val_dice:.4f}')
 
         # 每个epoch保存一次模型
         torch.save({
@@ -203,9 +203,9 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, device, 
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'train_loss': train_loss,
-            'test_loss': test_loss,
+            'val_loss': val_loss,
             'train_dice': train_dice,
-            'test_dice': test_dice,
+            'val_dice': val_dice,
         }, os.path.join(save_dir, f'model_epoch_{epoch + 1}.pth'))
 
     # 关闭TensorBoard的SummaryWriter
@@ -219,7 +219,7 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, device, 
 
     plt.subplot(1, 2, 1)
     plt.plot(train_losses, label='训练损失')
-    plt.plot(test_losses, label='测试损失')
+    plt.plot(val_losses, label='评估损失')
     plt.xlabel('Epoch')
     plt.ylabel('损失')
     plt.legend()
@@ -227,7 +227,7 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, device, 
 
     plt.subplot(1, 2, 2)
     plt.plot(train_dices, label='训练Dice')
-    plt.plot(test_dices, label='测试Dice')
+    plt.plot(val_dices, label='评估Dice')
     plt.xlabel('Epoch')
     plt.ylabel('Dice系数')
     plt.legend()
@@ -251,18 +251,18 @@ def main():
     # 设置数据路径
     train_images_dir = 'data/SJTU/train/img'
     train_masks_dir = 'data/SJTU/train/mask'
-    test_images_dir = 'data/SJTU/test/img'
-    test_masks_dir = 'data/SJTU/test/mask'
+    val_images_dir = 'data/SJTU/val/img'
+    val_masks_dir = 'data/SJTU/val/mask'
 
     # 使用自定义数据增强
     train_transform = CustomTransform(apply_prob=0.5)
 
     # 创建数据集和数据加载器
     train_dataset = OCTDataset(train_images_dir, train_masks_dir, transform=train_transform)
-    test_dataset = OCTDataset(test_images_dir, test_masks_dir, transform=None)
+    val_dataset = OCTDataset(val_images_dir, val_masks_dir, transform=None)
 
     train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=4)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=4)
 
     # 创建模型
     model = UNet(in_channels=1, out_channels=11).to(device)
@@ -275,7 +275,7 @@ def main():
     model = train_model(
         model=model,
         train_loader=train_loader,
-        test_loader=test_loader,
+        val_loader=val_loader,
         criterion=criterion,
         optimizer=optimizer,
         device=device,

@@ -205,8 +205,8 @@ def main():
     model.load_state_dict(torch.load('checkpoints/best_model.pth', map_location=device))
     
     # 设置测试数据
-    test_images_dir = 'data/RetinalOCT_Dataset/processed/test/images'
-    test_masks_dir = 'data/RetinalOCT_Dataset/processed/test/masks'
+    test_images_dir = 'data/SJTU/test/img'
+    test_masks_dir = 'data/SJTU/test/mask'
     test_dataset = OCTDataset(test_images_dir, test_masks_dir, transform=None)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=4, shuffle=False, num_workers=4)
     
