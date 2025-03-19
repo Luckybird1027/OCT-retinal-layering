@@ -4,13 +4,10 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from model.unet import UNet
-from utils.advanced_augmentation import standardize_size
-from utils.advanced_preprocess import advanced_denoising, advanced_enhancement
-from utils.dataset import OCTDataset
+from utils.dataset import create_dataloader
 
 # 设置matplotlib支持中文
 plt.rcParams['font.sans-serif'] = ['SimHei']
@@ -40,34 +37,15 @@ def generate_color_map(num_classes=11):
     return color_map
 
 
-def predict_and_visualize(model, image_path, output_dir, device):
+def predict_and_visualize_single(model, image, mask, output_path, device):
     """预测单张图像并可视化结果"""
-    # 创建输出目录
-    os.makedirs(output_dir, exist_ok=True)
-
-    # 读取图像
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    original_size = img.shape[:2]
-
-    # 调整图像大小
-    img_resized = standardize_size(img)
-
-    # 标准化
-    img_norm = img_resized / 255.0
-
-    # 应用预处理
-    img_denoised = advanced_denoising(img_norm)
-    img_enhanced = advanced_enhancement(img_denoised)
-
-    # 转换为PyTorch张量
-    img_tensor = torch.from_numpy(img_enhanced).float().unsqueeze(0).unsqueeze(0).to(device)
-
     # 预测
-    model.eval()
-    with torch.no_grad():
-        output = model(img_tensor)
-        output = torch.softmax(output, dim=1)
-        pred = torch.argmax(output, dim=1).squeeze().cpu().numpy()
+    output = model(image)
+    output = torch.softmax(output, dim=1)
+    pred = torch.argmax(output, dim=1).squeeze().cpu().numpy()
+
+    mask = mask.squeeze().cpu().numpy()
+    image_np = image.squeeze().cpu().numpy()  # 获取 NumPy 数组
 
     # 获取颜色映射
     color_map = generate_color_map()
@@ -77,132 +55,73 @@ def predict_and_visualize(model, image_path, output_dir, device):
     for class_idx in range(len(color_map)):
         segmentation_map[pred == class_idx] = color_map[class_idx]
 
-    # 调整回原始大小
-    segmentation_map_resized = cv2.resize(segmentation_map, (original_size[1], original_size[0]),
-                                          interpolation=cv2.INTER_NEAREST)
+    # 创建彩色标签图
+    mask_map = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+    for class_idx in range(len(color_map)):
+        mask_map[mask == class_idx] = color_map[class_idx]
 
     # 生成原始图像的彩色版本用于可视化
-    original_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+    # 将图像数据缩放回 0-255 并转换为 uint8
+    original_img_scaled = (image_np * 255).astype(np.uint8)
+    original_rgb = cv2.cvtColor(original_img_scaled, cv2.COLOR_GRAY2RGB)
 
     # 创建混合图像 (原始图像 + 半透明分割图)
     alpha = 0.5
-    blend = cv2.addWeighted(original_rgb, 1 - alpha, segmentation_map_resized, alpha, 0)
+    blend = cv2.addWeighted(original_rgb, 1 - alpha, segmentation_map, alpha, 0)
+
+    # 创建输出目录
+    os.makedirs(output_path, exist_ok=True)
 
     # 保存结果
-    cv2.imwrite(os.path.join(output_dir, 'original.png'), img)
-    cv2.imwrite(os.path.join(output_dir, 'segmentation.png'), segmentation_map_resized)
-    cv2.imwrite(os.path.join(output_dir, 'blend.png'), blend)
+    cv2.imwrite(os.path.join(output_path, 'original.png'), original_img_scaled)
+    cv2.imwrite(os.path.join(output_path, 'segmentation.png'), segmentation_map)
+    cv2.imwrite(os.path.join(output_path, 'blend.png'), blend)
+    cv2.imwrite(os.path.join(output_path, 'mask.png'), mask_map)
 
     # 可视化结果
-    plt.figure(figsize=(15, 5))
+    plt.figure(figsize=(14, 10), dpi=300)
 
-    plt.subplot(1, 3, 1)
-    plt.imshow(img, cmap='gray')
+    plt.subplot(2, 2, 1)
+    plt.imshow(original_img_scaled, cmap='gray')
     plt.title('原始图像')
     plt.axis('off')
 
-    plt.subplot(1, 3, 2)
-    plt.imshow(segmentation_map_resized)
+    plt.subplot(2, 2, 2)
+    plt.imshow(mask_map)
+    plt.title('标准标签')
+    plt.axis('off')
+
+    plt.subplot(2, 2, 3)
+    plt.imshow(segmentation_map)
     plt.title('分割结果')
     plt.axis('off')
 
-    plt.subplot(1, 3, 3)
+    plt.subplot(2, 2, 4)
     plt.imshow(blend)
     plt.title('融合结果')
     plt.axis('off')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'visualization.png'))
-    plt.show()
-
-    return segmentation_map_resized, blend
+    plt.savefig(os.path.join(output_path, 'visualization.png'))
+    plt.close()
 
 
-def evaluate_test_set(model, test_loader, device, output_dir='results'):
-    """评估测试集并保存结果"""
+def predict_folder(model, data_loader, output_dir, device):
+    """预测指定路径的所有图像并保存结果"""
     # 创建输出目录
     os.makedirs(output_dir, exist_ok=True)
 
-    # 获取颜色映射
-    color_map = generate_color_map()
-
-    # 计算Dice系数
-    dice_scores = []
-
     model.eval()
     with torch.no_grad():
-        for i, (image, mask) in enumerate(tqdm(test_loader, desc='Evaluating')):
-            # 将数据移至设备
+        pbar = tqdm(data_loader, desc='Predicting')
+        for i, (image, mask) in enumerate(pbar):
             image = image.to(device)
-            mask = mask.to(device)
+            mask = mask.to(device)  # 虽然mask只用于可视化，但保持一致性
 
-            # 预测
-            output = model(image)
-            pred = torch.argmax(output, dim=1)
+            image_name = f'image_{i}'
+            predict_and_visualize_single(model, image, mask, os.path.join(output_dir, image_name), device)
 
-            # 计算Dice系数
-            dice_score = 0.0
-            for class_idx in range(11):
-                pred_class = (pred == class_idx).float()
-                mask_class = (mask == class_idx).float()
-
-                intersection = (pred_class * mask_class).sum()
-                union = pred_class.sum() + mask_class.sum()
-
-                if union > 0:
-                    dice_score += (2 * intersection) / (union + 1e-6)
-
-            dice_score /= 11  # 11个类别的平均值
-            dice_scores.append(dice_score.item())
-
-            # 保存第一个批次的一些示例结果
-            if i == 0:
-                for j in range(min(4, image.size(0))):
-                    img = image[j].squeeze().cpu().numpy()
-                    msk = mask[j].cpu().numpy()
-                    prd = pred[j].cpu().numpy()
-
-                    # 创建彩色分割图
-                    msk_rgb = np.zeros((msk.shape[0], msk.shape[1], 3), dtype=np.uint8)
-                    prd_rgb = np.zeros((prd.shape[0], prd.shape[1], 3), dtype=np.uint8)
-
-                    for class_idx in range(len(color_map)):
-                        msk_rgb[msk == class_idx] = color_map[class_idx]
-                        prd_rgb[prd == class_idx] = color_map[class_idx]
-
-                    # 创建可视化结果
-                    plt.figure(figsize=(15, 5))
-
-                    plt.subplot(1, 3, 1)
-                    plt.imshow(img, cmap='gray')
-                    plt.title('原始图像')
-                    plt.axis('off')
-
-                    plt.subplot(1, 3, 2)
-                    plt.imshow(msk_rgb)
-                    plt.title('真实标签')
-                    plt.axis('off')
-
-                    plt.subplot(1, 3, 3)
-                    plt.imshow(prd_rgb)
-                    plt.title('预测结果')
-                    plt.axis('off')
-
-                    plt.tight_layout()
-                    plt.savefig(os.path.join(output_dir, f'example_{j + 1}.png'))
-                    plt.close()
-
-    # 计算平均Dice系数
-    mean_dice = np.mean(dice_scores)
-    print(f'平均Dice系数: {mean_dice:.4f}')
-
-    # 保存Dice系数
-    with open(os.path.join(output_dir, 'dice_scores.txt'), 'w') as f:
-        f.write(f'平均Dice系数: {mean_dice:.4f}\n')
-        for i, dice in enumerate(dice_scores):
-            f.write(f'样本 {i + 1}: {dice:.4f}\n')
-
-    return mean_dice, dice_scores
+    print('所有图像预测完成!')
 
 
 def main():
@@ -214,19 +133,16 @@ def main():
     model = UNet(in_channels=1, out_channels=11).to(device)
     model.load_state_dict(torch.load('train/checkpoints/best_model.pth', map_location=device, weights_only=True))
 
-    # 设置测试数据
-    test_images_dir = 'data/SJTU/test/img'
-    test_masks_dir = 'data/SJTU/test/mask'
-    test_dataset = OCTDataset(test_images_dir, test_masks_dir, transform=None)
-    test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False, num_workers=4)
+    # 设置预测数据路径
+    predict_images_dir = 'data/SJTU/test/img'
+    predict_masks_dir = 'data/SJTU/test/mask'
+    output_results_dir = 'results/predictions'
 
-    # 评估测试集
-    evaluate_test_set(model, test_loader, device, output_dir='results')
+    # 创建数据加载器
+    data_loader = create_dataloader(predict_images_dir, predict_masks_dir, batch_size=1, shuffle=False)
 
-    # 预测单个样本
-    sample_image_path = 'data/RetinalOCT_Dataset/processed/test/images/sample_image.jpg'
-    if os.path.exists(sample_image_path):
-        predict_and_visualize(model, sample_image_path, 'results/sample', device)
+    # 预测指定路径的所有图像
+    predict_folder(model, data_loader, output_results_dir, device)
 
     print('预测完成!')
 

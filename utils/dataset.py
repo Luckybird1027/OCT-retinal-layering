@@ -76,7 +76,7 @@ class OCTDataset(Dataset):
         return img, mask
 
 
-def create_dataloader(images_dir, masks_dir, img_size=(984, 760), batch_size=4, shuffle=True, preprocess=True):
+def create_dataloader(images_dir, masks_dir, img_size=(720, 992), batch_size=1, shuffle=True, preprocess=True):
     """
     创建数据加载器
 
