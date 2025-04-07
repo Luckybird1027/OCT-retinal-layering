@@ -2,7 +2,7 @@ import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from utils.advanced_preprocess import anisotropic_diffusion, bm3d_denoising
+from utils.preprocess import anisotropic_diffusion, bm3d_denoising
 
 # 设置matplotlib支持中文
 plt.rcParams['font.sans-serif'] = ['SimHei']

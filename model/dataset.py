@@ -3,8 +3,8 @@ import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from utils.advanced_preprocess import advanced_denoising, advanced_enhancement
-from utils.advanced_augmentation import standardize_size
+from utils.preprocess import advanced_denoising, advanced_enhancement
+from utils.augmentation import standardize_size
 
 
 class OCTDataset(Dataset):

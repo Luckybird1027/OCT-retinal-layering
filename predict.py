@@ -7,7 +7,7 @@ import torch
 from tqdm import tqdm
 
 from model.unet import UNet
-from utils.dataset import create_dataloader
+from model.dataset import create_dataloader
 
 # 设置matplotlib支持中文
 plt.rcParams['font.sans-serif'] = ['SimHei']

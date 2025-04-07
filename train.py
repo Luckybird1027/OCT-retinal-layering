@@ -11,8 +11,8 @@ import matplotlib.pyplot as plt
 import torchvision
 
 from model.unet import UNet
-from utils.dataset import OCTDataset
-from utils.advanced_augmentation import advanced_augmentation
+from model.dataset import OCTDataset
+from utils.augmentation import advanced_augmentation
 
 # 设置matplotlib支持中文
 plt.rcParams['font.sans-serif'] = ['SimHei']
@@ -254,7 +254,7 @@ def main():
     val_images_dir = 'data/SJTU/val/img'
     val_masks_dir = 'data/SJTU/val/mask'
 
-    # 使用自定义数据增强
+    # 定义自定义数据增强
     train_transform = CustomTransform(apply_prob=0.5)
 
     # 创建数据集和数据加载器

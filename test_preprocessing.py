@@ -4,7 +4,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
-from utils.advanced_augmentation import (
+from utils.augmentation import (
     tps_transform,
     rotate_image,
     random_crop,
@@ -15,7 +15,7 @@ from utils.advanced_augmentation import (
     nsct_enhancement,
     advanced_augmentation, spatial_domain_augmentation
 )
-from utils.advanced_preprocess import (
+from utils.preprocess import (
     anisotropic_diffusion,
     bm3d_denoising,
     phase_congruency_enhancement,
