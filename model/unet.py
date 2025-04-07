@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
 
 class UNet(nn.Module):
     def __init__(self, in_channels=1, out_channels=11):
@@ -37,7 +37,7 @@ class UNet(nn.Module):
         
         # 输出层
         self.out = nn.Conv2d(64, out_channels, kernel_size=1)
-        
+
     def _make_encoder_block(self, in_channels, out_channels):
         return nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
@@ -47,7 +47,7 @@ class UNet(nn.Module):
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
-    
+
     def _make_decoder_block(self, in_channels, out_channels):
         return nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),

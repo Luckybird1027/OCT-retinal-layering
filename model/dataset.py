@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from utils.preprocess import advanced_denoising, advanced_enhancement
+from utils.preprocess import ad_bm3d_image_denoising, pc_hpf_image_enhancement
 from utils.augmentation import standardize_size
 
 
@@ -63,8 +63,8 @@ class OCTDataset(Dataset):
 
         # 应用预处理
         if self.preprocess:
-            img = advanced_denoising(img)
-            img = advanced_enhancement(img)
+            img = ad_bm3d_image_denoising(img)
+            img = pc_hpf_image_enhancement(img)
 
         # 将灰度值映射到类别索引
         mask = self.lookup_table[mask]

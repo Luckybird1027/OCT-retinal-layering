@@ -30,18 +30,18 @@ def set_seed(seed=42):
 
 
 # 计算Dice系数
-def dice_coefficient(pred, target, epsilon=1e-6):
+def dice_coefficient(predict, target, epsilon=1e-6):
     # 将预测转换为one-hot表示
-    pred = torch.argmax(pred, dim=1)
+    predict = torch.argmax(predict, dim=1)
 
     # 计算每个类别的Dice系数
     dice_scores = []
     for class_idx in range(11):  # 11个类别
-        pred_class = (pred == class_idx).float()
+        predict_class = (predict == class_idx).float()
         target_class = (target == class_idx).float()
 
-        intersection = (pred_class * target_class).sum()
-        union = pred_class.sum() + target_class.sum() + epsilon
+        intersection = (predict_class * target_class).sum()
+        union = predict_class.sum() + target_class.sum() + epsilon
         dice = (2 * intersection + epsilon) / union
         dice_scores.append(dice)
 
@@ -176,8 +176,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
             pred_gray[predictions == c] = reverse_lookup[c]
 
         # 添加灰度标签和预测图到 TensorBoard
-        mask_gray_grid = torchvision.utils.make_grid(mask_gray.unsqueeze(1))
-        pred_gray_grid = torchvision.utils.make_grid(pred_gray.unsqueeze(1))
+        torchvision.utils.make_grid(mask_gray.unsqueeze(1))
+        torchvision.utils.make_grid(pred_gray.unsqueeze(1))
 
         # 将原始图像与灰度标签和预测图并排显示
         combined_grid = torchvision.utils.make_grid(
@@ -272,7 +272,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     # 训练模型
-    model = train_model(
+    train_model(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,

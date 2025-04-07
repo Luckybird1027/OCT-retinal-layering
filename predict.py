@@ -37,7 +37,7 @@ def generate_color_map(num_classes=11):
     return color_map
 
 
-def predict_and_visualize_single(model, image, mask, output_path, device):
+def predict_and_visualize_single(model, image, mask, output_path):
     """预测单张图像并可视化结果"""
     # 预测
     output = model(image)
@@ -119,7 +119,7 @@ def predict_folder(model, data_loader, output_dir, device):
             mask = mask.to(device)  # 虽然mask只用于可视化，但保持一致性
 
             image_name = f'image_{i}'
-            predict_and_visualize_single(model, image, mask, os.path.join(output_dir, image_name), device)
+            predict_and_visualize_single(model, image, mask, os.path.join(output_dir, image_name))
 
     print('所有图像预测完成!')
 

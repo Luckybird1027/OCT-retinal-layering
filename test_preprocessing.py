@@ -20,8 +20,8 @@ from utils.preprocess import (
     bm3d_denoising,
     phase_congruency_enhancement,
     butterworth_highpass_filter,
-    advanced_denoising,
-    advanced_enhancement
+    ad_bm3d_image_denoising,
+    pc_hpf_image_enhancement
 )
 
 # 设置matplotlib支持中文
@@ -86,8 +86,8 @@ def test_preprocessing(img):
 
     # 5. 测试完整的高级预处理流程
     print("正在应用完整预处理流程...")
-    img_denoised = advanced_denoising(img)
-    img_processed = advanced_enhancement(img_denoised)
+    img_denoised = ad_bm3d_image_denoising(img)
+    img_processed = pc_hpf_image_enhancement(img_denoised)
 
     # 显示预处理结果
     print("正在生成预处理对比图...")

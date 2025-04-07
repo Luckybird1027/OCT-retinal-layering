@@ -75,14 +75,18 @@ def bm3d_denoising(img, sigma_psd=10 / 255):
     if img.max() > 1.0:
         img = img / 255.0
 
-    # 应用BM3D去噪
-    # 参数设置
+    # BM3D参数设置
     custom_bm3d_profile = BM3DProfile()
-    custom_bm3d_profile.bs_ht = 4  # 硬阈值处理阶段的块大小
-    custom_bm3d_profile.bs_wiener = 4  # 维纳滤波阶段的块大小
-    custom_bm3d_profile.search_window_ht = 30  # 硬阈值处理阶段的搜索窗口大小
-    custom_bm3d_profile.search_window_wiener = 30  # 维纳滤波阶段的搜索窗口大小
+    # 硬阈值处理阶段的块大小
+    custom_bm3d_profile.bs_ht = 4
+    # 维纳滤波阶段的块大小
+    custom_bm3d_profile.bs_wiener = 4
+    # 硬阈值处理阶段的搜索窗口大小
+    custom_bm3d_profile.search_window_ht = 30
+    # 维纳滤波阶段的搜索窗口大小
+    custom_bm3d_profile.search_window_wiener = 30
 
+    # 应用BM3D去噪
     denoised_img = bm3d.bm3d(img, sigma_psd=sigma_psd,
                              stage_arg=bm3d.BM3DStages.ALL_STAGES,
                              profile=custom_bm3d_profile,
@@ -141,18 +145,18 @@ def butterworth_highpass_filter(img, cutoff=0.08, order=1):
 
     # 创建滤波器
     rows, cols = img.shape
-    crow, ccol = rows // 2, cols // 2
+    crow, _ = rows // 2, cols // 2
 
     x = np.linspace(-1, 1, cols)
     y = np.linspace(-1, 1, rows)
-    X, Y = np.meshgrid(x, y)
-    dist = np.sqrt(X ** 2 + Y ** 2)
+    x, y = np.meshgrid(x, y)
+    dist = np.sqrt(x ** 2 + y ** 2)
 
     # 巴特沃斯高通滤波器
-    H = 1.0 / (1.0 + (cutoff / dist) ** (2 * order))
+    h = 1.0 / (1.0 + (cutoff / dist) ** (2 * order))
 
     # 应用滤波器
-    img_fft_filtered = img_fft * H
+    img_fft_filtered = img_fft * h
 
     # 转回空间域
     img_filtered = np.real(ifft2(ifftshift(img_fft_filtered)))
@@ -171,9 +175,9 @@ def butterworth_highpass_filter(img, cutoff=0.08, order=1):
     return combined
 
 
-def advanced_denoising(img):
+def ad_bm3d_image_denoising(img):
     """
-    基于AD-BM3D的混合去噪框架
+    对图像进行基于AD-BM3D的混合去噪
     
     参数:
         img: 输入图像
@@ -182,7 +186,10 @@ def advanced_denoising(img):
         去噪后的图像
     """
     # 归一化到[0,1]
-    img_norm = (img - np.min(img)) / (np.max(img) - np.min(img))
+    if img.max() > 1.0:
+        img_norm = (img - np.min(img)) / (np.max(img) - np.min(img))
+    else:
+        img_norm = img
 
     # 步骤1：各向异性扩散算法抑制散斑噪声
     img_ad = anisotropic_diffusion(img_norm)
@@ -193,9 +200,9 @@ def advanced_denoising(img):
     return img_bm3d
 
 
-def advanced_enhancement(img):
+def pc_hpf_image_enhancement(img):
     """
-    高级图像增强
+    对图像进行基于PC-HPF的混合增强
     
     参数:
         img: 输入图像
