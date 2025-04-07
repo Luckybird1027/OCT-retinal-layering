@@ -92,9 +92,9 @@ class CompoundLoss(nn.Module):
         # 组合损失
         total_loss = self.alpha * dice_loss + self.beta * focal_loss + self.gamma * edge_loss
 
-        return total_loss, {"dice_loss": dice_loss.item(),
-                            "focal_loss": focal_loss.item(),
-                            "edge_loss": edge_loss.item()}
+        return total_loss, {"dice_loss": dice_loss,
+                            "focal_loss": focal_loss,
+                            "edge_loss": edge_loss}
 
     def dice_loss(self, inputs, targets, epsilon=1e-6):
         """
@@ -265,13 +265,15 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
             train_dice += dice.item()
 
             # 记录各个损失分量
-            train_dice_loss += loss_components["dice_loss"]
-            train_focal_loss += loss_components["focal_loss"]
-            train_edge_loss += loss_components["edge_loss"]
+            train_dice_loss += loss_components["dice_loss"].item()
+            train_focal_loss += loss_components["focal_loss"].item()
+            train_edge_loss += loss_components["edge_loss"].item()
 
-            train_pbar.set_postfix({'loss': loss.item(), 'dice_loss': loss_components["dice_loss"].item(),
+            train_pbar.set_postfix({'loss': loss.item(), 
+                                    'dice_loss': loss_components["dice_loss"].item(),
                                     'focal_loss': loss_components["focal_loss"].item(),
-                                    'edge_loss': loss_components["edge_loss"].item(), 'dice': dice.item()})
+                                    'edge_loss': loss_components["edge_loss"].item(), 
+                                    'dice': dice.item()})
 
         # 计算平均损失和Dice系数
         train_loss /= len(train_loader)
@@ -306,11 +308,15 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
                 val_dice += dice.item()
 
                 # 记录各个损失分量
-                val_dice_loss += loss_components["dice_loss"]
-                val_focal_loss += loss_components["focal_loss"]
-                val_edge_loss += loss_components["edge_loss"]
+                val_dice_loss += loss_components["dice_loss"].item()
+                val_focal_loss += loss_components["focal_loss"].item()
+                val_edge_loss += loss_components["edge_loss"].item()
 
-                val_pbar.set_postfix({'loss': loss.item(), 'dice': dice.item()})
+                val_pbar.set_postfix({'loss': loss.item(),
+                                      'dice_loss': loss_components["dice_loss"].item(),
+                                      'focal_loss': loss_components["focal_loss"].item(),
+                                      'edge_loss': loss_components["edge_loss"].item(),
+                                      'dice': dice.item()})
 
         # 计算平均损失和Dice系数
         val_loss /= len(val_loader)
@@ -387,8 +393,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
 
         # 打印当前epoch的结果
         print(f'Epoch {epoch + 1}/{num_epochs}:')
-        print(f'  训练损失: {train_loss:.4f}, 训练Dice: {train_dice:.4f}')
-        print(f'  验证损失: {val_loss:.4f}, 验证Dice: {val_dice:.4f}')
+        print(f'  训练损失: {train_loss:.4f}, 训练Dice损失: {train_dice_loss:.4f}, 训练Focal损失: {train_focal_loss:.4f}, 训练边界损失: {train_edge_loss:.4f}, 训练Dice: {train_dice:.4f}')
+        print(f'  验证损失: {val_loss:.4f}, 验证Dice损失: {val_dice_loss:.4f}, 验证Focal损失: {val_focal_loss:.4f}, 验证边界损失: {val_edge_loss:.4f}, 验证Dice: {val_dice:.4f}')
 
         # 每个epoch保存一次模型
         torch.save({

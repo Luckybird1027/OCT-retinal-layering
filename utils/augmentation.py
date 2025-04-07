@@ -18,7 +18,12 @@ def tps_transform(img, num_control_points=16, std_dev=10, regularization=0.3):
     返回:
         形变后的图像
     """
-    rows, cols = img.shape
+    # 判断输入图像的维度
+    if len(img.shape) == 3:
+        rows, cols, channels = img.shape
+    else:
+        rows, cols = img.shape
+        channels = 1
 
     # 创建控制点网格
     src_points = np.zeros((num_control_points, 2), dtype=np.float32)
@@ -53,9 +58,17 @@ def tps_transform(img, num_control_points=16, std_dev=10, regularization=0.3):
     tps.estimateTransformation(dst_points, src_points, matches)
 
     # 应用变换
-    warped_img = tps.warpImage(img)
-
-    return warped_img
+    if len(img.shape) == 3:
+        # 处理多通道图像
+        warped_img = np.zeros_like(img)
+        for c in range(channels):
+            # 对每个通道单独应用变换
+            channel = img[:, :, c]
+            warped_img[:, :, c] = tps.warpImage(channel)
+        return warped_img
+    else:
+        # 处理单通道图像
+        return tps.warpImage(img)
 
 
 def dynamic_gamma_correction(img, gamma_range=(0.6, 1.8)):
