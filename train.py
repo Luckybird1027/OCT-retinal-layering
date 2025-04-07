@@ -67,7 +67,9 @@ class CompoundLoss(nn.Module):
     复合损失函数:
     L_total = α * L_Dice + β * L_Focal + γ * L_Edge
     """
-    def __init__(self, alpha=1.0, beta=1.0, gamma=1.0, num_classes=11, edge_weight=0.5, focal_gamma=2.0, focal_alpha=0.25):
+
+    def __init__(self, alpha=1.0, beta=1.0, gamma=1.0, num_classes=11, edge_weight=0.5, focal_gamma=2.0,
+                 focal_alpha=0.25):
         super(CompoundLoss, self).__init__()
         self.alpha = alpha
         self.beta = beta
@@ -76,79 +78,79 @@ class CompoundLoss(nn.Module):
         self.edge_weight = edge_weight
         self.focal_gamma = focal_gamma
         self.focal_alpha = focal_alpha
-        
+
     def forward(self, inputs, targets):
         # 计算Dice损失
         dice_loss = self.dice_loss(inputs, targets)
-        
+
         # 计算Focal损失
         focal_loss = self.focal_loss(inputs, targets)
-        
+
         # 计算边界敏感损失
         edge_loss = self.edge_loss(inputs, targets)
-        
+
         # 组合损失
         total_loss = self.alpha * dice_loss + self.beta * focal_loss + self.gamma * edge_loss
-        
-        return total_loss, {"dice_loss": dice_loss.item(), 
-                           "focal_loss": focal_loss.item(), 
-                           "edge_loss": edge_loss.item()}
-    
+
+        return total_loss, {"dice_loss": dice_loss.item(),
+                            "focal_loss": focal_loss.item(),
+                            "edge_loss": edge_loss.item()}
+
     def dice_loss(self, inputs, targets, epsilon=1e-6):
         """
         计算多类别Dice损失
         """
         # 转换预测为概率分布
         probs = F.softmax(inputs, dim=1)
-        
+
         # 计算每个类别的Dice损失
         dice_score = 0.0
         for class_idx in range(self.num_classes):
             # 获取当前类别的概率
             prob_class = probs[:, class_idx]
-            
+
             # 获取当前类别的目标（one-hot）
             target_class = (targets == class_idx).float()
-            
+
             # 计算交集
             intersection = (prob_class * target_class).sum(dim=(1, 2))
-            
+
             # 计算并集
             cardinality = prob_class.sum(dim=(1, 2)) + target_class.sum(dim=(1, 2)) + epsilon
-            
+
             # 计算Dice系数
             dice = (2. * intersection + epsilon) / cardinality
-            
+
             # 累加每个类别的Dice系数
             dice_score += dice.mean()
-            
+
         # 计算平均Dice系数并转换为损失
         avg_dice = dice_score / self.num_classes
         return 1.0 - avg_dice
-    
+
     def focal_loss(self, inputs, targets):
         """
         计算多类别Focal损失
         """
         # 将目标转换为one-hot编码
         targets_one_hot = F.one_hot(targets, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
-        
+
         # 计算softmax概率
         probs = F.softmax(inputs, dim=1)
-        
+
         # 应用focal loss公式: -alpha * (1-pt)^gamma * log(pt)
         pt = torch.sum(targets_one_hot * probs, dim=1)  # 预测正确类别的概率
-        
+
         # 避免log(0)
         pt = torch.clamp(pt, min=1e-7, max=1.0)
-        
+
         # 计算focal loss
         focal_weight = (1 - pt) ** self.focal_gamma
         focal = -self.focal_alpha * focal_weight * torch.log(pt)
-        
+
         # 返回平均focal loss
         return focal.mean()
-    
+
     def edge_loss(self, inputs, targets):
         """
         计算边界敏感损失: 
@@ -156,65 +158,65 @@ class CompoundLoss(nn.Module):
         """
         batch_size = targets.size(0)
         edge_loss = 0.0
-        
+
         # 获取预测类别
         preds = torch.argmax(inputs, dim=1)
-        
+
         for b in range(batch_size):
             target = targets[b]  # (H, W)
-            pred = preds[b]      # (H, W)
-            
+            pred = preds[b]  # (H, W)
+
             edge_loss_sample = 0.0
-            
+
             # 逐个类别计算边界损失
             for c in range(1, self.num_classes):  # 从类别1开始（忽略背景类别0）
                 # 生成当前类别的二值掩码
                 target_mask = (target == c).float()
-                
+
                 # 如果当前类别在目标中不存在，跳过
                 if target_mask.sum() == 0:
                     continue
-                
+
                 # 计算边界 - 使用形态学操作
                 kernel = torch.ones(3, 3, device=target.device)
-                dilated = F.conv2d(target_mask.unsqueeze(0).unsqueeze(0), 
-                                  kernel.unsqueeze(0).unsqueeze(0), 
-                                  padding=1) > 0
-                eroded = F.conv2d(target_mask.unsqueeze(0).unsqueeze(0), 
-                                 kernel.unsqueeze(0).unsqueeze(0), 
-                                 padding=1) == 9
-                
+                dilated = F.conv2d(target_mask.unsqueeze(0).unsqueeze(0),
+                                   kernel.unsqueeze(0).unsqueeze(0),
+                                   padding=1) > 0
+                eroded = F.conv2d(target_mask.unsqueeze(0).unsqueeze(0),
+                                  kernel.unsqueeze(0).unsqueeze(0),
+                                  padding=1) == 9
+
                 # 边界是膨胀和腐蚀的差
-                boundary = (dilated - eroded).squeeze().float()
-                
+                boundary = torch.logical_xor(dilated, eroded).squeeze().float()
+
                 # 计算距离变换
                 target_mask_np = target_mask.cpu().numpy()
                 dist_transform = distance_transform_edt(1 - target_mask_np)
                 dist_transform = torch.from_numpy(dist_transform).to(target.device)
-                
+
                 # 计算边界区域
                 edge_region = boundary > 0
-                
+
                 # 如果边界区域为空，跳过
                 num_edge_pixels = edge_region.sum()
                 if num_edge_pixels == 0:
                     continue
-                
+
                 # 计算边界区域的预测误差
                 pred_mask = (pred == c).float()
                 edge_diff = torch.abs(pred_mask - target_mask)[edge_region]
-                
+
                 # 应用距离权重
                 distance_weight = torch.exp(-dist_transform[edge_region])
                 weighted_diff = edge_diff * distance_weight
-                
+
                 # 计算当前类别的边界损失
                 class_edge_loss = weighted_diff.sum() / num_edge_pixels
                 edge_loss_sample += class_edge_loss
-            
+
             # 累加批次中的样本损失
             edge_loss += edge_loss_sample / (self.num_classes - 1)  # 平均到类别数
-            
+
         # 计算批次的平均损失
         return edge_loss / batch_size
 
@@ -261,13 +263,15 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
             train_loss += loss.item()
             dice = dice_coefficient(outputs, masks)
             train_dice += dice.item()
-            
+
             # 记录各个损失分量
             train_dice_loss += loss_components["dice_loss"]
             train_focal_loss += loss_components["focal_loss"]
             train_edge_loss += loss_components["edge_loss"]
 
-            train_pbar.set_postfix({'loss': loss.item(), 'dice': dice.item()})
+            train_pbar.set_postfix({'loss': loss.item(), 'dice_loss': loss_components["dice_loss"].item(),
+                                    'focal_loss': loss_components["focal_loss"].item(),
+                                    'edge_loss': loss_components["edge_loss"].item(), 'dice': dice.item()})
 
         # 计算平均损失和Dice系数
         train_loss /= len(train_loader)
@@ -300,7 +304,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
                 val_loss += loss.item()
                 dice = dice_coefficient(outputs, masks)
                 val_dice += dice.item()
-                
+
                 # 记录各个损失分量
                 val_dice_loss += loss_components["dice_loss"]
                 val_focal_loss += loss_components["focal_loss"]
@@ -322,7 +326,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
         writer.add_scalar('Loss/val', val_loss, epoch)
         writer.add_scalar('Dice/train', train_dice, epoch)
         writer.add_scalar('Dice/val', val_dice, epoch)
-        
+
         # 记录各个损失分量
         writer.add_scalar('Loss_Components/train_dice', train_dice_loss, epoch)
         writer.add_scalar('Loss_Components/train_focal', train_focal_loss, epoch)
@@ -440,8 +444,8 @@ def main():
     # 设置数据路径
     train_images_dir = 'data/SJTU/train/img'
     train_masks_dir = 'data/SJTU/train/mask'
-    val_images_dir = 'data/SJTU/val/img'
-    val_masks_dir = 'data/SJTU/val/mask'
+    val_images_dir = 'data/SJTU/eval/img'
+    val_masks_dir = 'data/SJTU/eval/mask'
 
     # 定义自定义数据增强
     train_transform = CustomTransform(apply_prob=0.5)
