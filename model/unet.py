@@ -22,17 +22,17 @@ class UNet(nn.Module):
         # 瓶颈部分
         self.bottleneck = self._make_encoder_block(512, 1024)
         
-        # 解码器部分
-        self.upconv1 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)
+        # 解码器部分 - 使用子像素卷积替代转置卷积
+        self.upconv1 = self._make_subpixel_block(1024, 512)
         self.dec1 = self._make_decoder_block(1024, 512)
         
-        self.upconv2 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
+        self.upconv2 = self._make_subpixel_block(512, 256)
         self.dec2 = self._make_decoder_block(512, 256)
         
-        self.upconv3 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
+        self.upconv3 = self._make_subpixel_block(256, 128)
         self.dec3 = self._make_decoder_block(256, 128)
         
-        self.upconv4 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
+        self.upconv4 = self._make_subpixel_block(128, 64)
         self.dec4 = self._make_decoder_block(128, 64)
         
         # 输出层
@@ -56,6 +56,19 @@ class UNet(nn.Module):
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
+        )
+    
+    def _make_subpixel_block(self, in_channels, out_channels):
+        """
+        创建子像素卷积上采样块
+        """
+        return nn.Sequential(
+            # 将输入通道映射到 out_channels*4 (因为上采样因子是2)
+            nn.Conv2d(in_channels, out_channels * 4, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels * 4),
+            nn.ReLU(inplace=True),
+            # 使用PixelShuffle进行上采样，尺寸增加2倍
+            nn.PixelShuffle(2)
         )
     
     def forward(self, x):
