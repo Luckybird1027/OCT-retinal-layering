@@ -17,10 +17,16 @@ class UNet(nn.Module):
         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
         
         self.enc4 = self._make_encoder_block(256, 512)
-        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2) 
         
-        # 瓶颈部分
-        self.bottleneck = self._make_encoder_block(512, 1024)
+        # DenseNet风格的Bottleneck
+        self.growth_rate = 128
+        self.num_dense_layers = 4
+        self.bottleneck_dense = self._make_dense_block(512, self.growth_rate, self.num_dense_layers)
+        # 计算最终密集块输出通道数: 原始通道数 + 每层新增通道数 * 层数
+        dense_out_channels = 512 + self.growth_rate * self.num_dense_layers
+        # 过渡层将输出通道数转换回1024以匹配原设计
+        self.bottleneck_transition = self._make_transition(dense_out_channels, 1024)
         
         # 解码器部分 - 使用子像素卷积替代转置卷积
         self.upconv1 = self._make_subpixel_block(1024, 512)
@@ -37,6 +43,44 @@ class UNet(nn.Module):
         
         # 输出层
         self.out = nn.Conv2d(64, out_channels, kernel_size=1)
+
+    def _make_dense_block(self, in_channels, growth_rate, num_layers):
+        """
+        创建DenseNet风格的密集块，每一层都接收前面所有层的特征作为输入
+        
+        参数:
+        - in_channels: 输入通道数
+        - growth_rate: 每一层新增的通道数
+        - num_layers: 密集块中的层数
+        
+        返回:
+        - 密集块的层列表
+        """
+        layers = []
+        for i in range(num_layers):
+            layers.append(nn.Sequential(
+                nn.BatchNorm2d(in_channels + i * growth_rate),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(in_channels + i * growth_rate, growth_rate, kernel_size=3, padding=1)
+            ))
+        return nn.ModuleList(layers)
+    
+    def _make_transition(self, in_channels, out_channels):
+        """
+        创建用于降低特征图通道数的过渡层
+        
+        参数:
+        - in_channels: 输入通道数
+        - out_channels: 输出通道数
+        
+        返回:
+        - 过渡层序列
+        """
+        return nn.Sequential(
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        )
 
     def _make_encoder_block(self, in_channels, out_channels):
         return nn.Sequential(
@@ -78,8 +122,19 @@ class UNet(nn.Module):
         enc3 = self.enc3(self.pool2(enc2))
         enc4 = self.enc4(self.pool3(enc3))
         
-        # 瓶颈
-        bottleneck = self.bottleneck(self.pool4(enc4))
+        # 瓶颈部分 - 使用密集连接
+        bottleneck_input = self.pool4(enc4)
+        
+        # 实现密集连接的前向传播
+        x = bottleneck_input
+        for layer in self.bottleneck_dense:
+            # 计算新的特征
+            new_features = layer(x)
+            # 连接到现有特征
+            x = torch.cat([x, new_features], dim=1)
+        
+        # 应用过渡层得到最终的bottleneck输出
+        bottleneck = self.bottleneck_transition(x)
         
         # 解码器路径
         dec1 = self.upconv1(bottleneck)
