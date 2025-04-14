@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import torchvision
 import torch.nn.functional as F
 from scipy.ndimage import distance_transform_edt
+import argparse
 
 from model.unet import UNet
 from model.dataset import OCTDataset
@@ -440,34 +441,97 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
 
 
 def main():
+    """
+    主函数，用于训练UNet模型
+
+    命令行参数:
+    --train_images: 训练图像目录
+    --train_masks: 训练掩码目录
+    --val_images: 验证图像目录
+    --val_masks: 验证掩码目录
+    --batch_size: 批次大小
+    --num_workers: 数据加载器线程数
+    --in_channels: 输入通道数
+    --out_channels: 输出通道数
+    --epochs: 训练轮数
+    --lr: 学习率
+    --aug_prob: 数据增强应用概率
+    --save_dir: 模型保存目录
+    --seed: 随机种子
+    --alpha: Dice损失权重
+    --beta: Focal损失权重
+    --gamma: 边界损失权重
+
+    使用示例:
+    python train.py --batch_size 1 --num_workers 4 --epochs 20 --lr 0.001
+    """
+
+    # 命令行参数解析
+    parser = argparse.ArgumentParser(description='OCT图像分割训练')
+    
+    # 数据相关参数
+    parser.add_argument('--train_images', type=str, default='data/SJTU/train/img', help='训练图像目录')
+    parser.add_argument('--train_masks', type=str, default='data/SJTU/train/mask', help='训练掩码目录')
+    parser.add_argument('--val_images', type=str, default='data/SJTU/eval/img', help='验证图像目录')
+    parser.add_argument('--val_masks', type=str, default='data/SJTU/eval/mask', help='验证掩码目录')
+    parser.add_argument('--batch_size', type=int, default=1, help='批次大小')
+    parser.add_argument('--num_workers', type=int, default=4, help='数据加载器线程数')
+    
+    # 模型相关参数
+    parser.add_argument('--in_channels', type=int, default=1, help='输入通道数')
+    parser.add_argument('--out_channels', type=int, default=11, help='输出通道数')
+    
+    # 训练相关参数
+    parser.add_argument('--epochs', type=int, default=20, help='训练轮数')
+    parser.add_argument('--lr', type=float, default=0.001, help='学习率')
+    parser.add_argument('--aug_prob', type=float, default=0.5, help='数据增强应用概率')
+    parser.add_argument('--save_dir', type=str, default='train/checkpoints', help='模型保存目录')
+    parser.add_argument('--seed', type=int, default=42, help='随机种子')
+    
+    # 损失函数相关参数
+    parser.add_argument('--alpha', type=float, default=1.0, help='Dice损失权重')
+    parser.add_argument('--beta', type=float, default=0.5, help='Focal损失权重')
+    parser.add_argument('--gamma', type=float, default=0.7, help='边界损失权重')
+    
+    args = parser.parse_args()
+
     # 设置随机种子
-    set_seed()
+    set_seed(args.seed)
 
     # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'使用设备: {device}')
 
     # 设置数据路径
-    train_images_dir = 'data/SJTU/train/img'
-    train_masks_dir = 'data/SJTU/train/mask'
-    val_images_dir = 'data/SJTU/eval/img'
-    val_masks_dir = 'data/SJTU/eval/mask'
+    train_images_dir = args.train_images
+    train_masks_dir = args.train_masks
+    val_images_dir = args.val_images
+    val_masks_dir = args.val_masks
 
     # 定义自定义数据增强
-    train_transform = CustomTransform(apply_prob=0.5)
+    train_transform = CustomTransform(apply_prob=args.aug_prob)
 
     # 创建数据集和数据加载器
     train_dataset = OCTDataset(train_images_dir, train_masks_dir, transform=train_transform)
     val_dataset = OCTDataset(val_images_dir, val_masks_dir, transform=None)
-    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     # 创建模型
-    model = UNet(in_channels=1, out_channels=11).to(device)
+    model = UNet(in_channels=args.in_channels, out_channels=args.out_channels).to(device)
 
     # 定义复合损失函数和优化器
-    criterion = CompoundLoss(alpha=1.0, beta=0.5, gamma=0.7, num_classes=11).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.out_channels).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+
+    # 打印训练配置
+    print(f"\n{'='*20} 训练配置 {'='*20}")
+    print(f"批次大小: {args.batch_size}")
+    print(f"学习率: {args.lr}")
+    print(f"训练轮数: {args.epochs}")
+    print(f"损失函数权重: Dice({args.alpha}) + Focal({args.beta}) + Edge({args.gamma})")
+    print(f"数据增强概率: {args.aug_prob}")
+    print(f"{'='*50}\n")
 
     # 训练模型
     train_model(
@@ -477,8 +541,8 @@ def main():
         criterion=criterion,
         optimizer=optimizer,
         device=device,
-        num_epochs=20,
-        save_dir='train/checkpoints'
+        num_epochs=args.epochs,
+        save_dir=args.save_dir
     )
 
     print('训练完成!')
