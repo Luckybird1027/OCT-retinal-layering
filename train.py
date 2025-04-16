@@ -222,7 +222,7 @@ class CompoundLoss(nn.Module):
         return edge_loss / batch_size
 
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, device, num_epochs=30, save_dir='checkpoints'):
+def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, num_epochs=30, save_dir='checkpoints', early_stopping_patience=10):
     # 创建保存检查点的目录
     os.makedirs(save_dir, exist_ok=True)
 
@@ -236,6 +236,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
     val_dices = []
 
     best_val_dice = 0.0
+    epochs_no_improve = 0
+    best_epoch = 0
 
     for epoch in range(num_epochs):
         # 训练阶段
@@ -333,6 +335,9 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
         writer.add_scalar('Loss/val', val_loss, epoch)
         writer.add_scalar('Dice/train', train_dice, epoch)
         writer.add_scalar('Dice/val', val_dice, epoch)
+        
+        # 记录当前学习率
+        writer.add_scalar('Learning_Rate', optimizer.param_groups[0]['lr'], epoch)
 
         # 记录各个损失分量
         writer.add_scalar('Loss_Components/train_dice', train_dice_loss, epoch)
@@ -386,16 +391,28 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
         )
         writer.add_image('Combined/Image_Mask_Prediction_Gray', combined_grid, epoch)
 
-        # 保存最佳模型
-        if val_dice > best_val_dice:
-            best_val_dice = val_dice
-            torch.save(model.state_dict(), os.path.join(save_dir, 'best_model.pth'))
-            print(f'保存最佳模型，Dice分数: {best_val_dice:.4f}')
-
         # 打印当前epoch的结果
         print(f'Epoch {epoch + 1}/{num_epochs}:')
+        print(f'  学习率: {optimizer.param_groups[0]["lr"]:.6f}')
         print(f'  训练损失: {train_loss:.4f}, 训练Dice损失: {train_dice_loss:.4f}, 训练Focal损失: {train_focal_loss:.4f}, 训练边界损失: {train_edge_loss:.4f}, 训练Dice: {train_dice:.4f}')
         print(f'  验证损失: {val_loss:.4f}, 验证Dice损失: {val_dice_loss:.4f}, 验证Focal损失: {val_focal_loss:.4f}, 验证边界损失: {val_edge_loss:.4f}, 验证Dice: {val_dice:.4f}')
+
+        # 更新学习率调度器 (基于验证 Dice)
+        scheduler.step(val_dice)
+
+        # 早停逻辑和保存最佳模型
+        if val_dice > best_val_dice:
+            best_val_dice = val_dice
+            best_epoch = epoch + 1
+            torch.save(model.state_dict(), os.path.join(save_dir, 'best_model.pth'))
+            print(f'---> 保存最佳模型 (Epoch {best_epoch}), 验证 Dice 分数: {best_val_dice:.4f}')
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            print(f'---> 验证 Dice 未提升，连续 {epochs_no_improve} 个 epochs.')
+            if epochs_no_improve >= early_stopping_patience:
+                print(f'---> 早停触发！连续 {early_stopping_patience} 个 epochs 验证 Dice 未提升。最佳模型在 Epoch {best_epoch}，Dice 为 {best_val_dice:.4f}')
+                break
 
         # 每个epoch保存一次模型
         torch.save({
@@ -411,8 +428,9 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
     # 关闭TensorBoard的SummaryWriter
     writer.close()
 
-    # 保存最终模型
+    # 保存最终模型 (可能是早停前的模型，也可能是训练完所有 epoch 的模型)
     torch.save(model.state_dict(), os.path.join(save_dir, 'final_model.pth'))
+    print(f"最终模型已保存。最佳模型保存在 'best_model.pth' (Epoch {best_epoch}, Val Dice: {best_val_dice:.4f})")
 
     # 绘制训练过程
     plt.figure(figsize=(12, 5))
@@ -522,15 +540,22 @@ def main():
 
     # 定义复合损失函数和优化器
     criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.out_channels).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+
+    # 在优化器中添加 weight_decay (L2 正则化)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+
+    # 添加学习率调度器 (例如: 当验证 Dice 停止提升时降低学习率)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=5, verbose=True) # patience 可以调整
 
     # 打印训练配置
     print(f"\n{'='*20} 训练配置 {'='*20}")
     print(f"批次大小: {args.batch_size}")
-    print(f"学习率: {args.lr}")
+    print(f"初始学习率: {args.lr}")
+    print(f"权重衰减 (L2正则化): {optimizer.param_groups[0]['weight_decay']}")
     print(f"训练轮数: {args.epochs}")
     print(f"损失函数权重: Dice({args.alpha}) + Focal({args.beta}) + Edge({args.gamma})")
     print(f"数据增强概率: {args.aug_prob}")
+    print(f"使用学习率调度器: ReduceLROnPlateau (patience={scheduler.patience})") # 提示使用了调度器
     print(f"{'='*50}\n")
 
     # 训练模型
@@ -540,9 +565,11 @@ def main():
         val_loader=val_loader,
         criterion=criterion,
         optimizer=optimizer,
+        scheduler=scheduler,    
         device=device,
         num_epochs=args.epochs,
-        save_dir=args.save_dir
+        save_dir=args.save_dir,
+        early_stopping_patience=8
     )
 
     print('训练完成!')
