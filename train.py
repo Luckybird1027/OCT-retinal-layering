@@ -545,7 +545,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
 
     # 添加学习率调度器 (例如: 当验证 Dice 停止提升时降低学习率)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=5, verbose=True) # patience 可以调整
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=5)
 
     # 打印训练配置
     print(f"\n{'='*20} 训练配置 {'='*20}")
@@ -555,7 +555,7 @@ def main():
     print(f"训练轮数: {args.epochs}")
     print(f"损失函数权重: Dice({args.alpha}) + Focal({args.beta}) + Edge({args.gamma})")
     print(f"数据增强概率: {args.aug_prob}")
-    print(f"使用学习率调度器: ReduceLROnPlateau (patience={scheduler.patience})") # 提示使用了调度器
+    print(f"使用学习率调度器: ReduceLROnPlateau (patience={scheduler.patience})")
     print(f"{'='*50}\n")
 
     # 训练模型
