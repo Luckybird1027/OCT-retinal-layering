@@ -223,7 +223,8 @@ class CompoundLoss(nn.Module):
         return edge_loss / batch_size
 
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, num_epochs=30, save_dir='checkpoints', early_stopping_patience=10):
+def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, num_epochs=30,
+                save_dir='checkpoints', early_stopping_patience=10):
     # 创建保存检查点的目录
     os.makedirs(save_dir, exist_ok=True)
 
@@ -273,10 +274,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             train_focal_loss += loss_components["focal_loss"].item()
             train_edge_loss += loss_components["edge_loss"].item()
 
-            train_pbar.set_postfix({'loss': loss.item(), 
+            train_pbar.set_postfix({'loss': loss.item(),
                                     'dice_loss': loss_components["dice_loss"].item(),
                                     'focal_loss': loss_components["focal_loss"].item(),
-                                    'edge_loss': loss_components["edge_loss"].item(), 
+                                    'edge_loss': loss_components["edge_loss"].item(),
                                     'dice': dice.item()})
 
         # 计算平均损失和Dice系数
@@ -395,8 +396,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         # 打印当前epoch的结果
         print(f'Epoch {epoch + 1}/{num_epochs}:')
         print(f'  学习率: {optimizer.param_groups[0]["lr"]:.6f}')
-        print(f'  训练损失: {train_loss:.4f}, 训练Dice损失: {train_dice_loss:.4f}, 训练Focal损失: {train_focal_loss:.4f}, 训练边界损失: {train_edge_loss:.4f}, 训练Dice: {train_dice:.4f}')
-        print(f'  验证损失: {val_loss:.4f}, 验证Dice损失: {val_dice_loss:.4f}, 验证Focal损失: {val_focal_loss:.4f}, 验证边界损失: {val_edge_loss:.4f}, 验证Dice: {val_dice:.4f}')
+        print(
+            f'  训练损失: {train_loss:.4f}, 训练Dice损失: {train_dice_loss:.4f}, 训练Focal损失: {train_focal_loss:.4f}, 训练边界损失: {train_edge_loss:.4f}, 训练Dice: {train_dice:.4f}')
+        print(
+            f'  验证损失: {val_loss:.4f}, 验证Dice损失: {val_dice_loss:.4f}, 验证Focal损失: {val_focal_loss:.4f}, 验证边界损失: {val_edge_loss:.4f}, 验证Dice: {val_dice:.4f}')
 
         # 更新学习率调度器 (基于验证 Dice)
         scheduler.step(val_dice)
@@ -412,7 +415,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             epochs_no_improve += 1
             print(f'---> 验证 Dice 未提升，连续 {epochs_no_improve} 个 epochs.')
             if epochs_no_improve >= early_stopping_patience:
-                print(f'---> 早停触发！连续 {early_stopping_patience} 个 epochs 验证 Dice 未提升。最佳模型在 Epoch {best_epoch}，Dice 为 {best_val_dice:.4f}')
+                print(
+                    f'---> 早停触发！连续 {early_stopping_patience} 个 epochs 验证 Dice 未提升。最佳模型在 Epoch {best_epoch}，Dice 为 {best_val_dice:.4f}')
                 break
 
         # 每个epoch保存一次模型
@@ -487,7 +491,7 @@ def main():
 
     # 命令行参数解析
     parser = argparse.ArgumentParser(description='OCT图像分割训练')
-    
+
     # 数据相关参数
     parser.add_argument('--train_images', type=str, default='data/SJTU/train/img', help='训练图像目录')
     parser.add_argument('--train_masks', type=str, default='data/SJTU/train/mask', help='训练掩码目录')
@@ -495,28 +499,27 @@ def main():
     parser.add_argument('--val_masks', type=str, default='data/SJTU/eval/mask', help='验证掩码目录')
     parser.add_argument('--batch_size', type=int, default=1, help='批次大小')
     parser.add_argument('--num_workers', type=int, default=4, help='数据加载器线程数')
-    
+
     # 模型相关参数
     parser.add_argument('--in_channels', type=int, default=1, help='输入通道数')
     parser.add_argument('--out_channels', type=int, default=11, help='输出通道数')
-    
+
     # 训练相关参数
     parser.add_argument('--epochs', type=int, default=40, help='训练轮数')
     parser.add_argument('--lr', type=float, default=0.001, help='学习率')
     parser.add_argument('--aug_prob', type=float, default=0.75, help='数据增强应用概率')
     parser.add_argument('--save_dir', type=str, default='train/checkpoints', help='模型保存目录')
     parser.add_argument('--seed', type=int, default=42, help='随机种子')
-    
+
     # 损失函数相关参数
     parser.add_argument('--alpha', type=float, default=1.0, help='Dice损失权重')
     parser.add_argument('--beta', type=float, default=0.5, help='Focal损失权重')
     parser.add_argument('--gamma', type=float, default=0.2, help='边界损失权重')
-    
+
     args = parser.parse_args()
 
     # 设置随机种子
     set_seed(args.seed)
-
 
     # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -541,16 +544,15 @@ def main():
     model = UNet(in_channels=args.in_channels, out_channels=args.out_channels).to(device)
 
     # 定义复合损失函数和优化器
-    criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.out_channels).to(device)
-
-    # 在优化器中添加 weight_decay (L2 正则化)
+    criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.out_channels).to(
+        device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
 
     # 添加学习率调度器 (例如: 当验证 Dice 停止提升时降低学习率)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=5)
 
     # 打印训练配置
-    print(f"\n{'='*20} 训练配置 {'='*20}")
+    print(f"\n{'=' * 20} 训练配置 {'=' * 20}")
     print(f"批次大小: {args.batch_size}")
     print(f"初始学习率: {args.lr}")
     print(f"权重衰减 (L2正则化): {optimizer.param_groups[0]['weight_decay']}")
@@ -558,7 +560,7 @@ def main():
     print(f"损失函数权重: Dice({args.alpha}) + Focal({args.beta}) + Edge({args.gamma})")
     print(f"数据增强概率: {args.aug_prob}")
     print(f"使用学习率调度器: ReduceLROnPlateau (patience={scheduler.patience})")
-    print(f"{'='*50}\n")
+    print(f"{'=' * 50}\n")
 
     # 训练模型
     train_model(
@@ -567,7 +569,7 @@ def main():
         val_loader=val_loader,
         criterion=criterion,
         optimizer=optimizer,
-        scheduler=scheduler,    
+        scheduler=scheduler,
         device=device,
         num_epochs=args.epochs,
         save_dir=args.save_dir,
