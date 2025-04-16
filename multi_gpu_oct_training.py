@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -12,17 +13,17 @@ import torchvision
 import torch.nn.functional as F
 from scipy.ndimage import distance_transform_edt
 import argparse
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from model.unet import UNet
 from model.dataset import OCTDataset
 from utils.augmentation import advanced_augmentation
 
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 # 设置matplotlib支持中文
-plt.rcParams['font.sans-serif'] = ['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
+# plt.rcParams['font.sans-serif'] = ['SimHei']
+# plt.rcParams['axes.unicode_minus'] = False
 
 
 # 设置随机种子以确保可重复性
@@ -157,7 +158,7 @@ class CompoundLoss(nn.Module):
 
     def edge_loss(self, inputs, targets):
         """
-        计算边界敏感损失: 
+        计算边界敏感损失:
         L_Edge = sum_{c=1}^9 (1/N_c) * sum_{p∈E_c} ||y_hat_p - y_p|| * exp(-d_p)
         """
         batch_size = targets.size(0)
@@ -225,12 +226,15 @@ class CompoundLoss(nn.Module):
         return edge_loss / batch_size
 
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, device, num_epochs=30, save_dir='checkpoints'):
+def train_model(model, train_loader, val_loader, criterion, optimizer, device, num_epochs=30, save_dir='checkpoints',
+                local_rank=0):
     # 创建保存检查点的目录
-    os.makedirs(save_dir, exist_ok=True)
+    if local_rank == 0:
+        os.makedirs(save_dir, exist_ok=True)
 
     # 创建TensorBoard的SummaryWriter
-    writer = SummaryWriter(os.path.join(save_dir, 'logs'))
+    if local_rank == 0:
+        writer = SummaryWriter(os.path.join(save_dir, 'logs'))
 
     # 记录训练过程
     train_losses = []
@@ -241,6 +245,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
     best_val_dice = 0.0
 
     for epoch in range(num_epochs):
+        # 设置分布式采样器的 epoch
+        if isinstance(train_loader.sampler, DistributedSampler):
+            train_loader.sampler.set_epoch(epoch)
+
         # 训练阶段
         model.train()
         train_loss = 0.0
@@ -249,7 +257,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
         train_focal_loss = 0.0
         train_edge_loss = 0.0
 
-        train_pbar = tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Train]')
+        train_pbar = tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Train]', disable=local_rank != 0)
         for images, masks in train_pbar:
             images = images.to(device)
             masks = masks.to(device)
@@ -273,10 +281,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
             train_focal_loss += loss_components["focal_loss"].item()
             train_edge_loss += loss_components["edge_loss"].item()
 
-            train_pbar.set_postfix({'loss': loss.item(), 
+            train_pbar.set_postfix({'loss': loss.item(),
                                     'dice_loss': loss_components["dice_loss"].item(),
                                     'focal_loss': loss_components["focal_loss"].item(),
-                                    'edge_loss': loss_components["edge_loss"].item(), 
+                                    'edge_loss': loss_components["edge_loss"].item(),
                                     'dice': dice.item()})
 
         # 计算平均损失和Dice系数
@@ -296,7 +304,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
         val_focal_loss = 0.0
         val_edge_loss = 0.0
 
-        val_pbar = tqdm(val_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Val]')
+        val_pbar = tqdm(val_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Val]', disable=local_rank != 0)
         with torch.no_grad():
             for images, masks in val_pbar:
                 images = images.to(device)
@@ -332,118 +340,143 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, device, n
         val_dices.append(val_dice)
 
         # 记录到TensorBoard
-        writer.add_scalar('Loss/train', train_loss, epoch)
-        writer.add_scalar('Loss/val', val_loss, epoch)
-        writer.add_scalar('Dice/train', train_dice, epoch)
-        writer.add_scalar('Dice/val', val_dice, epoch)
+        if local_rank == 0:
+            writer.add_scalar('Loss/train', train_loss, epoch)
+            writer.add_scalar('Loss/val', val_loss, epoch)
+            writer.add_scalar('Dice/train', train_dice, epoch)
+            writer.add_scalar('Dice/val', val_dice, epoch)
 
-        # 记录各个损失分量
-        writer.add_scalar('Loss_Components/train_dice', train_dice_loss, epoch)
-        writer.add_scalar('Loss_Components/train_focal', train_focal_loss, epoch)
-        writer.add_scalar('Loss_Components/train_edge', train_edge_loss, epoch)
-        writer.add_scalar('Loss_Components/val_dice', val_dice_loss, epoch)
-        writer.add_scalar('Loss_Components/val_focal', val_focal_loss, epoch)
-        writer.add_scalar('Loss_Components/val_edge', val_edge_loss, epoch)
+            # 记录各个损失分量
+            writer.add_scalar('Loss_Components/train_dice', train_dice_loss, epoch)
+            writer.add_scalar('Loss_Components/train_focal', train_focal_loss, epoch)
+            writer.add_scalar('Loss_Components/train_edge', train_edge_loss, epoch)
+            writer.add_scalar('Loss_Components/val_dice', val_dice_loss, epoch)
+            writer.add_scalar('Loss_Components/val_focal', val_focal_loss, epoch)
+            writer.add_scalar('Loss_Components/val_edge', val_edge_loss, epoch)
 
-        # 每个 Epoch 记录一些图像到 TensorBoard
-        # 获取一个批次的图像和预测结果
-        images, masks = next(iter(val_loader))
-        images = images.to(device)
-        with torch.no_grad():
-            outputs = model(images)
-            predictions = torch.argmax(outputs, dim=1)
+            # 每个 Epoch 记录一些图像到 TensorBoard
+            # 获取一个批次的图像和预测结果
+            images, masks = next(iter(val_loader))
+            images = images.to(device)
+            with torch.no_grad():
+                outputs = model(images)
+                predictions = torch.argmax(outputs, dim=1)
 
-        # 添加原始图像、真实标签和预测结果到 TensorBoard
-        img_grid = torchvision.utils.make_grid(images[:4], normalize=True)
-        writer.add_image('Images', img_grid, epoch)
+            # 添加原始图像、真实标签和预测结果到 TensorBoard
+            img_grid = torchvision.utils.make_grid(images[:4], normalize=True)
+            writer.add_image('Images', img_grid, epoch)
 
-        # 将类别索引转换回灰度值
-        reverse_lookup = {
-            0: 0,
-            1: 26,
-            2: 51,
-            3: 77,
-            4: 102,
-            5: 128,
-            6: 153,
-            7: 179,
-            8: 204,
-            9: 230,
-            10: 255
-        }
-        mask_gray = torch.zeros_like(masks, dtype=torch.uint8).to(device)
-        pred_gray = torch.zeros_like(predictions, dtype=torch.uint8).to(device)
+            # 将类别索引转换回灰度值
+            reverse_lookup = {
+                0: 0,
+                1: 26,
+                2: 51,
+                3: 77,
+                4: 102,
+                5: 128,
+                6: 153,
+                7: 179,
+                8: 204,
+                9: 230,
+                10: 255
+            }
+            mask_gray = torch.zeros_like(masks, dtype=torch.uint8).to(device)
+            pred_gray = torch.zeros_like(predictions, dtype=torch.uint8).to(device)
 
-        for c in range(11):
-            mask_gray[masks == c] = reverse_lookup[c]
-            pred_gray[predictions == c] = reverse_lookup[c]
+            for c in range(11):
+                mask_gray[masks == c] = reverse_lookup[c]
+                pred_gray[predictions == c] = reverse_lookup[c]
 
-        # 添加灰度标签和预测图到 TensorBoard
-        torchvision.utils.make_grid(mask_gray.unsqueeze(1))
-        torchvision.utils.make_grid(pred_gray.unsqueeze(1))
+            # 添加灰度标签和预测图到 TensorBoard
+            torchvision.utils.make_grid(mask_gray.unsqueeze(1))
+            torchvision.utils.make_grid(pred_gray.unsqueeze(1))
 
-        # 将原始图像与灰度标签和预测图并排显示
-        combined_grid = torchvision.utils.make_grid(
-            torch.cat([images[:4], mask_gray.unsqueeze(1).float() / 255.0, pred_gray.unsqueeze(1).float() / 255.0],
-                      dim=0), nrow=4
-        )
-        writer.add_image('Combined/Image_Mask_Prediction_Gray', combined_grid, epoch)
+            # 将原始图像与灰度标签和预测图并排显示
+            combined_grid = torchvision.utils.make_grid(
+                torch.cat([images[:4], mask_gray.unsqueeze(1).float() / 255.0, pred_gray.unsqueeze(1).float() / 255.0],
+                          dim=0), nrow=4
+            )
+            writer.add_image('Combined/Image_Mask_Prediction_Gray', combined_grid, epoch)
 
         # 保存最佳模型
-        if val_dice > best_val_dice:
+        if local_rank == 0 and val_dice > best_val_dice:
             best_val_dice = val_dice
-            torch.save(model.state_dict(), os.path.join(save_dir, 'best_model.pth'))
+            if isinstance(model, DDP):
+                torch.save(model.module.state_dict(), os.path.join(save_dir, 'best_model.pth'))
+            else:
+                torch.save(model.state_dict(), os.path.join(save_dir, 'best_model.pth'))
             print(f'保存最佳模型，Dice分数: {best_val_dice:.4f}')
 
         # 打印当前epoch的结果
-        print(f'Epoch {epoch + 1}/{num_epochs}:')
-        print(f'  训练损失: {train_loss:.4f}, 训练Dice损失: {train_dice_loss:.4f}, 训练Focal损失: {train_focal_loss:.4f}, 训练边界损失: {train_edge_loss:.4f}, 训练Dice: {train_dice:.4f}')
-        print(f'  验证损失: {val_loss:.4f}, 验证Dice损失: {val_dice_loss:.4f}, 验证Focal损失: {val_focal_loss:.4f}, 验证边界损失: {val_edge_loss:.4f}, 验证Dice: {val_dice:.4f}')
+        if local_rank == 0:
+            print(f'Epoch {epoch + 1}/{num_epochs}:')
+            print(
+                f'  训练损失: {train_loss:.4f}, 训练Dice损失: {train_dice_loss:.4f}, 训练Focal损失: {train_focal_loss:.4f}, 训练边界损失: {train_edge_loss:.4f}, 训练Dice: {train_dice:.4f}')
+            print(
+                f'  验证损失: {val_loss:.4f}, 验证Dice损失: {val_dice_loss:.4f}, 验证Focal损失: {val_focal_loss:.4f}, 验证边界损失: {val_edge_loss:.4f}, 验证Dice: {val_dice:.4f}')
 
         # 每个epoch保存一次模型
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'train_loss': train_loss,
-            'val_loss': val_loss,
-            'train_dice': train_dice,
-            'val_dice': val_dice,
-        }, os.path.join(save_dir, f'model_epoch_{epoch + 1}.pth'))
+        if local_rank == 0:
+            if isinstance(model, DDP):
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.module.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'train_loss': train_loss,
+                    'val_loss': val_loss,
+                    'train_dice': train_dice,
+                    'val_dice': val_dice,
+                }, os.path.join(save_dir, f'model_epoch_{epoch + 1}.pth'))
+            else:
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'train_loss': train_loss,
+                    'val_loss': val_loss,
+                    'train_dice': train_dice,
+                    'val_dice': val_dice,
+                }, os.path.join(save_dir, f'model_epoch_{epoch + 1}.pth'))
 
     # 关闭TensorBoard的SummaryWriter
-    writer.close()
+    if local_rank == 0:
+        writer.close()
 
     # 保存最终模型
-    torch.save(model.state_dict(), os.path.join(save_dir, 'final_model.pth'))
+    if local_rank == 0:
+        if isinstance(model, DDP):
+            torch.save(model.module.state_dict(), os.path.join(save_dir, 'final_model.pth'))
+        else:
+            torch.save(model.state_dict(), os.path.join(save_dir, 'final_model.pth'))
 
     # 绘制训练过程
-    plt.figure(figsize=(12, 5))
+    if local_rank == 0:
+        plt.figure(figsize=(12, 5))
 
-    plt.subplot(1, 2, 1)
-    plt.plot(train_losses, label='训练损失')
-    plt.plot(val_losses, label='评估损失')
-    plt.xlabel('Epoch')
-    plt.ylabel('损失')
-    plt.legend()
-    plt.title('损失 vs. Epoch')
+        plt.subplot(1, 2, 1)
+        plt.plot(train_losses, label='Train Loss')
+        plt.plot(val_losses, label='Val Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.title('Loss vs. Epoch')
 
-    plt.subplot(1, 2, 2)
-    plt.plot(train_dices, label='训练Dice')
-    plt.plot(val_dices, label='评估Dice')
-    plt.xlabel('Epoch')
-    plt.ylabel('Dice系数')
-    plt.legend()
-    plt.title('Dice vs. Epoch')
+        plt.subplot(1, 2, 2)
+        plt.plot(train_dices, label='Train_Dice')
+        plt.plot(val_dices, label='Val_Dice')
+        plt.xlabel('Epoch')
+        plt.ylabel('Dice_coefficient')
+        plt.legend()
+        plt.title('Dice vs. Epoch')
 
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, 'training_history.png'))
-    plt.show()
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, 'training_history.png'))
+        plt.show()
 
     return model
 
 
-def main():
+def main(local_rank):
     """
     主函数，用于训练UNet模型
 
@@ -466,44 +499,46 @@ def main():
     --gamma: 边界损失权重
 
     使用示例:
-    python train.py --batch_size 1 --num_workers 4 --epochs 20 --lr 0.001
+    python -m torch.distributed.launch --nproc_per_node=2 train.py --batch_size 1 --num_workers 4 --epochs 20 --lr 0.001
     """
+
+    # 初始化分布式环境
+    dist.init_process_group(backend='nccl', init_method='env://')
+    torch.cuda.set_device(local_rank)
+    device = torch.device('cuda', local_rank)
 
     # 命令行参数解析
     parser = argparse.ArgumentParser(description='OCT图像分割训练')
-    
+
     # 数据相关参数
     parser.add_argument('--train_images', type=str, default='data/SJTU/train/img', help='训练图像目录')
     parser.add_argument('--train_masks', type=str, default='data/SJTU/train/mask', help='训练掩码目录')
     parser.add_argument('--val_images', type=str, default='data/SJTU/eval/img', help='验证图像目录')
     parser.add_argument('--val_masks', type=str, default='data/SJTU/eval/mask', help='验证掩码目录')
-    parser.add_argument('--batch_size', type=int, default=1, help='批次大小')
+    parser.add_argument('--batch_size', type=int, default=8, help='批次大小')
     parser.add_argument('--num_workers', type=int, default=4, help='数据加载器线程数')
-    
+
     # 模型相关参数
     parser.add_argument('--in_channels', type=int, default=1, help='输入通道数')
     parser.add_argument('--out_channels', type=int, default=11, help='输出通道数')
-    
+
     # 训练相关参数
     parser.add_argument('--epochs', type=int, default=20, help='训练轮数')
     parser.add_argument('--lr', type=float, default=0.001, help='学习率')
     parser.add_argument('--aug_prob', type=float, default=0.5, help='数据增强应用概率')
     parser.add_argument('--save_dir', type=str, default='train/checkpoints', help='模型保存目录')
     parser.add_argument('--seed', type=int, default=42, help='随机种子')
-    
+
     # 损失函数相关参数
     parser.add_argument('--alpha', type=float, default=1.0, help='Dice损失权重')
     parser.add_argument('--beta', type=float, default=0.5, help='Focal损失权重')
     parser.add_argument('--gamma', type=float, default=0.7, help='边界损失权重')
-    
+
     args = parser.parse_args()
 
     # 设置随机种子
     set_seed(args.seed)
 
-
-    # 设置设备
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'使用设备: {device}')
 
     # 设置数据路径
@@ -518,24 +553,30 @@ def main():
     # 创建数据集和数据加载器
     train_dataset = OCTDataset(train_images_dir, train_masks_dir, transform=train_transform)
     val_dataset = OCTDataset(val_images_dir, val_masks_dir, transform=None)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+
+    train_sampler = DistributedSampler(train_dataset)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
+                              sampler=train_sampler)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     # 创建模型
     model = UNet(in_channels=args.in_channels, out_channels=args.out_channels).to(device)
+    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
     # 定义复合损失函数和优化器
-    criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.out_channels).to(device)
+    criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.out_channels).to(
+        device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     # 打印训练配置
-    print(f"\n{'='*20} 训练配置 {'='*20}")
-    print(f"批次大小: {args.batch_size}")
-    print(f"学习率: {args.lr}")
-    print(f"训练轮数: {args.epochs}")
-    print(f"损失函数权重: Dice({args.alpha}) + Focal({args.beta}) + Edge({args.gamma})")
-    print(f"数据增强概率: {args.aug_prob}")
-    print(f"{'='*50}\n")
+    if local_rank == 0:
+        print(f"\n{'=' * 20} 训练配置 {'=' * 20}")
+        print(f"批次大小: {args.batch_size}")
+        print(f"学习率: {args.lr}")
+        print(f"训练轮数: {args.epochs}")
+        print(f"损失函数权重: Dice({args.alpha}) + Focal({args.beta}) + Edge({args.gamma})")
+        print(f"数据增强概率: {args.aug_prob}")
+        print(f"{'=' * 50}\n")
 
     # 训练模型
     train_model(
@@ -546,11 +587,18 @@ def main():
         optimizer=optimizer,
         device=device,
         num_epochs=args.epochs,
-        save_dir=args.save_dir
+        save_dir=args.save_dir,
+        local_rank=local_rank
     )
 
-    print('训练完成!')
+    if local_rank == 0:
+        print('训练完成!')
+
+    # 销毁分布式环境
+    dist.destroy_process_group()
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    local_rank = int(os.environ["LOCAL_RANK"])
+    main(local_rank)
+
