@@ -574,8 +574,9 @@ def main(local_rank):
 
     train_sampler = DistributedSampler(train_dataset)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
-                              sampler=train_sampler)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+                              sampler=train_sampler, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
+                            pin_memory=True)
 
     # 创建模型
     model = UNet(in_channels=args.in_channels, out_channels=args.out_channels).to(device)
