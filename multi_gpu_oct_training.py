@@ -541,7 +541,7 @@ def main(local_rank):
     parser.add_argument('--out_channels', type=int, default=11, help='输出通道数')
 
     # 训练相关参数
-    parser.add_argument('--epochs', type=int, default=40, help='训练轮数')
+    parser.add_argument('--epochs', type=int, default=100, help='训练轮数')
     parser.add_argument('--lr', type=float, default=0.001, help='学习率')
     parser.add_argument('--aug_prob', type=float, default=0.75, help='数据增强应用概率')
     parser.add_argument('--save_dir', type=str, default='train/checkpoints', help='模型保存目录')

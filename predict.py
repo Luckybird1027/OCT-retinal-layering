@@ -10,8 +10,8 @@ from model.unet import UNet
 from model.dataset import create_dataloader
 
 # 设置matplotlib支持中文
-plt.rcParams['font.sans-serif'] = ['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
+# plt.rcParams['font.sans-serif'] = ['SimHei']
+# plt.rcParams['axes.unicode_minus'] = False
 
 
 def generate_color_map(num_classes=11):
@@ -83,22 +83,22 @@ def predict_and_visualize_single(model, image, mask, output_path):
 
     plt.subplot(2, 2, 1)
     plt.imshow(original_img_scaled, cmap='gray')
-    plt.title('原始图像')
+    plt.title('Original image')
     plt.axis('off')
 
     plt.subplot(2, 2, 2)
     plt.imshow(mask_map)
-    plt.title('标准标签')
+    plt.title('Standard label')
     plt.axis('off')
 
     plt.subplot(2, 2, 3)
     plt.imshow(segmentation_map)
-    plt.title('分割结果')
+    plt.title('Segmentation result')
     plt.axis('off')
 
     plt.subplot(2, 2, 4)
     plt.imshow(blend)
-    plt.title('融合结果')
+    plt.title('Fusion result')
     plt.axis('off')
 
     plt.tight_layout()
