@@ -3,7 +3,7 @@ from PIL import Image
 import numpy as np
 from numpy.random import shuffle
 
-from mat_data_transformer import load_and_slice_mat_data
+from utils.mat.mat_data_transformer import load_and_slice_mat_data
 
 split_ratio = [0.1, 0.1, 0.8]  # test, val, train 比例
 # 使用 os.path.join 构造路径，更健壮
