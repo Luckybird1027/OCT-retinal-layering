@@ -13,10 +13,13 @@ from scipy.ndimage import distance_transform_edt
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+import pandas as pd
 
 from model.dataset import OCTDataset
 from model.unet import UNet
 from utils.augmentation import advanced_augmentation
+from utils.metrics import calculate_all_metrics, dice_coefficient as metrics_dice # 重命名以区分
+from utils.visualization import create_visualization_grid
 
 # 设置matplotlib支持中文
 plt.rcParams['font.sans-serif'] = ['SimHei']
@@ -31,26 +34,6 @@ def set_seed(seed=42):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-
-
-# 计算Dice系数
-def dice_coefficient(predict, target, epsilon=1e-6):
-    # 将预测转换为one-hot表示
-    predict = torch.argmax(predict, dim=1)
-
-    # 计算每个类别的Dice系数
-    dice_scores = []
-    for class_idx in range(11):  # 11个类别
-        predict_class = (predict == class_idx).float()
-        target_class = (target == class_idx).float()
-
-        intersection = (predict_class * target_class).sum()
-        union = predict_class.sum() + target_class.sum() + epsilon
-        dice = (2 * intersection + epsilon) / union
-        dice_scores.append(dice)
-
-    # 计算平均Dice系数
-    return torch.tensor(dice_scores).mean()
 
 
 # 自定义数据增强转换
@@ -224,189 +207,217 @@ class CompoundLoss(nn.Module):
 
 
 def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, device, num_epochs=30,
-                save_dir='checkpoints', early_stopping_patience=10):
+                save_dir='checkpoints', early_stopping_patience=10, num_classes=11):
     # 创建保存检查点的目录
     os.makedirs(save_dir, exist_ok=True)
 
     # 创建TensorBoard的SummaryWriter
     writer = SummaryWriter(os.path.join(save_dir, 'logs'))
 
-    # 记录训练过程
-    train_losses = []
-    val_losses = []
-    train_dices = []
-    val_dices = []
+    # 记录训练过程 - 扩展指标列表
+    history = {
+        'epoch': [],
+        'train_loss': [], 'val_loss': [],
+        'train_dice': [], 'val_dice': [],
+        'val_iou': [], 'val_mabld': [], 'val_hausdorff_95': [], 'val_thickness_correlation': []
+        # Add more metrics here if implemented and desired
+        # 'val_breakpoint_density': [], 'val_intersection_count': []
+    }
 
     best_val_dice = 0.0
     epochs_no_improve = 0
     best_epoch = 0
 
+    # 获取一个固定的验证批次用于可视化 (确保每次 epoch 可视化相同的样本)
+    fixed_val_batch = None
+    try:
+        fixed_val_batch = next(iter(val_loader))
+    except StopIteration:
+        print("警告：验证数据加载器为空，无法获取用于可视化的固定批次。")
+        fixed_val_batch = None # 或者处理这种情况
+
     for epoch in range(num_epochs):
-        # 训练阶段
+        history['epoch'].append(epoch + 1)
+        # --- 训练阶段 ---
         model.train()
-        train_loss = 0.0
-        train_dice = 0.0
-        train_dice_loss = 0.0
-        train_focal_loss = 0.0
-        train_edge_loss = 0.0
+        train_loss_epoch = 0.0
+        train_dice_epoch = 0.0
+        train_dice_loss_epoch = 0.0
+        train_focal_loss_epoch = 0.0
+        train_edge_loss_epoch = 0.0
 
         train_pbar = tqdm(train_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Train]')
         for images, masks in train_pbar:
             images = images.to(device)
             masks = masks.to(device)
 
-            # 前向传播
+            optimizer.zero_grad()
             outputs = model(images)
             loss, loss_components = criterion(outputs, masks)
-
-            # 反向传播和优化
-            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            # 计算指标
-            train_loss += loss.item()
-            dice = dice_coefficient(outputs, masks)
-            train_dice += dice.item()
+            with torch.no_grad():
+                 pred_indices = torch.argmax(outputs, dim=1)
+                 dice_train_batch = metrics_dice(pred_indices.cpu().numpy(), masks.cpu().numpy(), num_classes=num_classes, ignore_index=0)
 
-            # 记录各个损失分量
-            train_dice_loss += loss_components["dice_loss"].item()
-            train_focal_loss += loss_components["focal_loss"].item()
-            train_edge_loss += loss_components["edge_loss"].item()
+            train_loss_epoch += loss.item()
+            train_dice_epoch += dice_train_batch
+            train_dice_loss_epoch += loss_components["dice_loss"].item()
+            train_focal_loss_epoch += loss_components["focal_loss"].item()
+            train_edge_loss_epoch += loss_components["edge_loss"].item()
 
             train_pbar.set_postfix({'loss': loss.item(),
                                     'dice_loss': loss_components["dice_loss"].item(),
                                     'focal_loss': loss_components["focal_loss"].item(),
                                     'edge_loss': loss_components["edge_loss"].item(),
-                                    'dice': dice.item()})
+                                    'dice': dice_train_batch}) # 显示批次 dice
 
-        # 计算平均损失和Dice系数
-        train_loss /= len(train_loader)
-        train_dice /= len(train_loader)
-        train_dice_loss /= len(train_loader)
-        train_focal_loss /= len(train_loader)
-        train_edge_loss /= len(train_loader)
-        train_losses.append(train_loss)
-        train_dices.append(train_dice)
+        # 计算平均训练损失和Dice系数
+        avg_train_loss = train_loss_epoch / len(train_loader)
+        avg_train_dice = train_dice_epoch / len(train_loader)
+        avg_train_dice_loss = train_dice_loss_epoch / len(train_loader)
+        avg_train_focal_loss = train_focal_loss_epoch / len(train_loader)
+        avg_train_edge_loss = train_edge_loss_epoch / len(train_loader)
+        history['train_loss'].append(avg_train_loss)
+        history['train_dice'].append(avg_train_dice)
 
-        # 评估阶段
+        # --- 评估阶段 ---
         model.eval()
-        val_loss = 0.0
-        val_dice = 0.0
-        val_dice_loss = 0.0
-        val_focal_loss = 0.0
-        val_edge_loss = 0.0
+        val_loss_epoch = 0.0
+        all_val_metrics = {
+            'dice': [], 'iou': [], 'mabld': [], 'hausdorff_95': [], 'thickness_correlation': []
+            # 'breakpoint_density': [], 'intersection_count': []
+        }
+        val_dice_loss_epoch = 0.0
+        val_focal_loss_epoch = 0.0
+        val_edge_loss_epoch = 0.0
 
         val_pbar = tqdm(val_loader, desc=f'Epoch {epoch + 1}/{num_epochs} [Val]')
         with torch.no_grad():
             for images, masks in val_pbar:
                 images = images.to(device)
-                masks = masks.to(device)
+                masks = masks.to(device) # masks shape (B, H, W)
 
-                # 前向传播
-                outputs = model(images)
+                outputs = model(images) # outputs shape (B, C, H, W)
                 loss, loss_components = criterion(outputs, masks)
+                pred_indices = torch.argmax(outputs, dim=1) # pred_indices shape (B, H, W)
 
-                # 计算指标
-                val_loss += loss.item()
-                dice = dice_coefficient(outputs, masks)
-                val_dice += dice.item()
+                val_loss_epoch += loss.item()
+                val_dice_loss_epoch += loss_components["dice_loss"].item()
+                val_focal_loss_epoch += loss_components["focal_loss"].item()
+                val_edge_loss_epoch += loss_components["edge_loss"].item()
 
-                # 记录各个损失分量
-                val_dice_loss += loss_components["dice_loss"].item()
-                val_focal_loss += loss_components["focal_loss"].item()
-                val_edge_loss += loss_components["edge_loss"].item()
+                # --- 计算所有指标 ---
+                # calculate_all_metrics 需要 numpy 输入 (B, H, W) or (H, W)
+                pred_np = pred_indices.cpu().numpy()
+                mask_np = masks.cpu().numpy()
 
-                val_pbar.set_postfix({'loss': loss.item(),
-                                      'dice_loss': loss_components["dice_loss"].item(),
-                                      'focal_loss': loss_components["focal_loss"].item(),
-                                      'edge_loss': loss_components["edge_loss"].item(),
-                                      'dice': dice.item()})
+                # 因为 calculate_all_metrics 可以处理批次，直接传入
+                batch_metrics = calculate_all_metrics(pred_np, mask_np, num_classes=num_classes, ignore_index=0)
 
-        # 计算平均损失和Dice系数
-        val_loss /= len(val_loader)
-        val_dice /= len(val_loader)
-        val_dice_loss /= len(val_loader)
-        val_focal_loss /= len(val_loader)
-        val_edge_loss /= len(val_loader)
-        val_losses.append(val_loss)
-        val_dices.append(val_dice)
+                # 收集批次指标 (加权)
+                for key, value in batch_metrics.items():
+                    if key in all_val_metrics and not np.isnan(value):
+                         # 乘以实际有效的样本数（如果批次不完整）
+                         all_val_metrics[key].append(value * images.size(0))
 
-        # 记录到TensorBoard
-        writer.add_scalar('Loss/train', train_loss, epoch)
-        writer.add_scalar('Loss/val', val_loss, epoch)
-        writer.add_scalar('Dice/train', train_dice, epoch)
-        writer.add_scalar('Dice/val', val_dice, epoch)
+                val_pbar.set_postfix({'loss': loss.item(), 'dice': batch_metrics.get('dice', 0.0)})
 
-        # 记录当前学习率
+        # 计算整个验证集的平均指标
+        num_val_samples = len(val_loader.dataset)
+        avg_val_metrics = {}
+        for key, values in all_val_metrics.items():
+             total_value = sum(v for v in values if not np.isnan(v))
+             # 使用实际样本数进行平均
+             avg_val_metrics[key] = total_value / num_val_samples if num_val_samples > 0 else 0.0
+
+
+        avg_val_loss = val_loss_epoch / len(val_loader)
+        avg_val_dice_loss = val_dice_loss_epoch / len(val_loader)
+        avg_val_focal_loss = val_focal_loss_epoch / len(val_loader)
+        avg_val_edge_loss = val_edge_loss_epoch / len(val_loader)
+
+        # 存储平均验证指标
+        history['val_loss'].append(avg_val_loss)
+        history['val_dice'].append(avg_val_metrics.get('dice', 0.0))
+        history['val_iou'].append(avg_val_metrics.get('iou', 0.0))
+        history['val_mabld'].append(avg_val_metrics.get('mabld', np.nan))
+        history['val_hausdorff_95'].append(avg_val_metrics.get('hausdorff_95', np.nan))
+        history['val_thickness_correlation'].append(avg_val_metrics.get('thickness_correlation', np.nan))
+        # history['val_breakpoint_density'].append(avg_val_metrics.get('breakpoint_density', 0.0))
+        # history['val_intersection_count'].append(avg_val_metrics.get('intersection_count', 0.0))
+
+
+        # --- TensorBoard 记录 ---
+        writer.add_scalar('Loss/train', avg_train_loss, epoch)
+        writer.add_scalar('Loss/val', avg_val_loss, epoch)
+        writer.add_scalar('Dice/train', avg_train_dice, epoch)
+        writer.add_scalar('Dice/val', history['val_dice'][-1], epoch)
+        writer.add_scalar('IoU/val', history['val_iou'][-1], epoch)
+        # 只有当值不是 NaN 时才记录边界/厚度指标
+        if not np.isnan(history['val_mabld'][-1]):
+            writer.add_scalar('Boundary/MABLD_val', history['val_mabld'][-1], epoch)
+        if not np.isnan(history['val_hausdorff_95'][-1]):
+            writer.add_scalar('Boundary/Hausdorff95_val', history['val_hausdorff_95'][-1], epoch)
+        if not np.isnan(history['val_thickness_correlation'][-1]):
+            writer.add_scalar('Thickness/Correlation_val', history['val_thickness_correlation'][-1], epoch)
+
+        # 记录学习率和损失分量
         writer.add_scalar('Learning_Rate', optimizer.param_groups[0]['lr'], epoch)
+        writer.add_scalar('Loss_Components/train_dice', avg_train_dice_loss, epoch)
+        writer.add_scalar('Loss_Components/train_focal', avg_train_focal_loss, epoch)
+        writer.add_scalar('Loss_Components/train_edge', avg_train_edge_loss, epoch)
+        writer.add_scalar('Loss_Components/val_dice', avg_val_dice_loss, epoch)
+        writer.add_scalar('Loss_Components/val_focal', avg_val_focal_loss, epoch)
+        writer.add_scalar('Loss_Components/val_edge', avg_val_edge_loss, epoch)
 
-        # 记录各个损失分量
-        writer.add_scalar('Loss_Components/train_dice', train_dice_loss, epoch)
-        writer.add_scalar('Loss_Components/train_focal', train_focal_loss, epoch)
-        writer.add_scalar('Loss_Components/train_edge', train_edge_loss, epoch)
-        writer.add_scalar('Loss_Components/val_dice', val_dice_loss, epoch)
-        writer.add_scalar('Loss_Components/val_focal', val_focal_loss, epoch)
-        writer.add_scalar('Loss_Components/val_edge', val_edge_loss, epoch)
+        # --- TensorBoard 图像记录 (使用新的可视化网格) ---
+        if fixed_val_batch is not None:
+            images_vis, masks_vis = fixed_val_batch
+            images_vis = images_vis.to(device)
+            # masks_vis 保持在 CPU 上，因为 create_visualization_grid 需要 numpy
+            # masks_vis = masks_vis.to(device) # 不需要移动到 device
 
-        # 每个 Epoch 记录一些图像到 TensorBoard
-        # 获取一个批次的图像和预测结果
-        images, masks = next(iter(val_loader))
-        images = images.to(device)
-        with torch.no_grad():
-            outputs = model(images)
-            predictions = torch.argmax(outputs, dim=1)
+            with torch.no_grad():
+                outputs_vis = model(images_vis)
+                predictions_vis = torch.argmax(outputs_vis, dim=1)
 
-        # 添加原始图像、真实标签和预测结果到 TensorBoard
-        img_grid = torchvision.utils.make_grid(images[:4], normalize=True)
-        writer.add_image('Images', img_grid, epoch)
+            # 创建可视化网格 (确保输入是正确的类型和设备)
+            # image_tensor: (B, 1, H, W) on CPU, range [0, 1]
+            # mask_tensor: (B, H, W) on CPU, indices
+            # pred_tensor: (B, H, W) on CPU, indices
+            visualization_grid = create_visualization_grid(
+                image_tensor=images_vis.cpu(), # 确保在 CPU 上
+                mask_tensor=masks_vis.cpu(),   # 确保在 CPU 上
+                pred_tensor=predictions_vis.cpu(), # 确保在 CPU 上
+                num_classes=num_classes,
+                max_images=4 # 最多显示 4 张图的对比
+            )
+            writer.add_image('Validation_Samples/Visualization', visualization_grid, epoch)
 
-        # 将类别索引转换回灰度值
-        reverse_lookup = {
-            0: 0,
-            1: 26,
-            2: 51,
-            3: 77,
-            4: 102,
-            5: 128,
-            6: 153,
-            7: 179,
-            8: 204,
-            9: 230,
-            10: 255
-        }
-        mask_gray = torch.zeros_like(masks, dtype=torch.uint8).to(device)
-        pred_gray = torch.zeros_like(predictions, dtype=torch.uint8).to(device)
 
-        for c in range(11):
-            mask_gray[masks == c] = reverse_lookup[c]
-            pred_gray[predictions == c] = reverse_lookup[c]
-
-        # 添加灰度标签和预测图到 TensorBoard
-        torchvision.utils.make_grid(mask_gray.unsqueeze(1))
-        torchvision.utils.make_grid(pred_gray.unsqueeze(1))
-
-        # 将原始图像与灰度标签和预测图并排显示
-        combined_grid = torchvision.utils.make_grid(
-            torch.cat([images[:4], mask_gray.unsqueeze(1).float() / 255.0, pred_gray.unsqueeze(1).float() / 255.0],
-                      dim=0), nrow=4
-        )
-        writer.add_image('Combined/Image_Mask_Prediction_Gray', combined_grid, epoch)
-
-        # 打印当前epoch的结果
+        # --- 打印当前 epoch 结果 (包含新指标) ---
         print(f'Epoch {epoch + 1}/{num_epochs}:')
         print(f'  学习率: {optimizer.param_groups[0]["lr"]:.6f}')
-        print(
-            f'  训练损失: {train_loss:.4f}, 训练Dice损失: {train_dice_loss:.4f}, 训练Focal损失: {train_focal_loss:.4f}, 训练边界损失: {train_edge_loss:.4f}, 训练Dice: {train_dice:.4f}')
-        print(
-            f'  验证损失: {val_loss:.4f}, 验证Dice损失: {val_dice_loss:.4f}, 验证Focal损失: {val_focal_loss:.4f}, 验证边界损失: {val_edge_loss:.4f}, 验证Dice: {val_dice:.4f}')
+        print(f'  训练 - Loss: {avg_train_loss:.4f}, Dice: {avg_train_dice:.4f}')
+        print(f'         DiceLoss: {avg_train_dice_loss:.4f}, FocalLoss: {avg_train_focal_loss:.4f}, EdgeLoss: {avg_train_edge_loss:.4f}')
+        # 打印时格式化 NaN
+        mabld_str = f"{history['val_mabld'][-1]:.4f}" if not np.isnan(history['val_mabld'][-1]) else "N/A"
+        hd95_str = f"{history['val_hausdorff_95'][-1]:.4f}" if not np.isnan(history['val_hausdorff_95'][-1]) else "N/A"
+        thick_corr_str = f"{history['val_thickness_correlation'][-1]:.4f}" if not np.isnan(history['val_thickness_correlation'][-1]) else "N/A"
+        print(f'  验证 - Loss: {avg_val_loss:.4f}, Dice: {history["val_dice"][-1]:.4f}, IoU: {history["val_iou"][-1]:.4f}')
+        print(f'         MABLD: {mabld_str}, HD95: {hd95_str}, ThickCorr: {thick_corr_str}')
+        print(f'         DiceLoss: {avg_val_dice_loss:.4f}, FocalLoss: {avg_val_focal_loss:.4f}, EdgeLoss: {avg_val_edge_loss:.4f}')
 
-        # 更新学习率调度器 (基于验证 Dice)
-        scheduler.step(val_dice)
 
-        # 早停逻辑和保存最佳模型
-        if val_dice > best_val_dice:
-            best_val_dice = val_dice
+        # --- 更新学习率调度器 (基于验证 Dice) ---
+        current_val_dice = history['val_dice'][-1]
+        scheduler.step(current_val_dice)
+
+        # --- 早停逻辑和保存最佳模型 (基于验证 Dice) ---
+        if current_val_dice > best_val_dice:
+            best_val_dice = current_val_dice
             best_epoch = epoch + 1
             torch.save(model.state_dict(), os.path.join(save_dir, 'best_model.pth'))
             print(f'---> 保存最佳模型 (Epoch {best_epoch}), 验证 Dice 分数: {best_val_dice:.4f}')
@@ -415,8 +426,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             epochs_no_improve += 1
             print(f'---> 验证 Dice 未提升，连续 {epochs_no_improve} 个 epochs.')
             if epochs_no_improve >= early_stopping_patience:
-                print(
-                    f'---> 早停触发！连续 {early_stopping_patience} 个 epochs 验证 Dice 未提升。最佳模型在 Epoch {best_epoch}，Dice 为 {best_val_dice:.4f}')
+                print(f'---> 早停触发！连续 {early_stopping_patience} 个 epochs 验证 Dice 未提升。最佳模型在 Epoch {best_epoch}，Dice 为 {best_val_dice:.4f}')
                 break
 
         # 每个epoch保存一次模型
@@ -424,10 +434,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'train_loss': train_loss,
-            'val_loss': val_loss,
-            'train_dice': train_dice,
-            'val_dice': val_dice,
+            'train_loss': avg_train_loss,
+            'val_loss': avg_val_loss,
+            'train_dice': avg_train_dice,
+            'val_dice': history['val_dice'][-1],
         }, os.path.join(save_dir, f'model_epoch_{epoch + 1}.pth'))
 
     # 关闭TensorBoard的SummaryWriter
@@ -437,28 +447,68 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
     torch.save(model.state_dict(), os.path.join(save_dir, 'final_model.pth'))
     print(f"最终模型已保存。最佳模型保存在 'best_model.pth' (Epoch {best_epoch}, Val Dice: {best_val_dice:.4f})")
 
-    # 绘制训练过程
-    plt.figure(figsize=(12, 5))
+    # --- 绘制训练过程 (包含新指标) ---
+    history_df = pd.DataFrame(history)
+    history_df.to_csv(os.path.join(save_dir, 'training_history.csv'), index=False) # 保存历史记录
 
-    plt.subplot(1, 2, 1)
-    plt.plot(train_losses, label='训练损失')
-    plt.plot(val_losses, label='评估损失')
+    # 绘制 Loss 和 Dice
+    plt.figure(figsize=(18, 12), dpi=150) # 增加画布大小
+
+    plt.subplot(2, 3, 1)
+    plt.plot(history_df['epoch'], history_df['train_loss'], label='训练损失')
+    plt.plot(history_df['epoch'], history_df['val_loss'], label='验证损失')
     plt.xlabel('Epoch')
     plt.ylabel('损失')
     plt.legend()
     plt.title('损失 vs. Epoch')
+    plt.grid(True)
 
-    plt.subplot(1, 2, 2)
-    plt.plot(train_dices, label='训练Dice')
-    plt.plot(val_dices, label='评估Dice')
+    plt.subplot(2, 3, 2)
+    plt.plot(history_df['epoch'], history_df['train_dice'], label='训练 Dice')
+    plt.plot(history_df['epoch'], history_df['val_dice'], label='验证 Dice')
     plt.xlabel('Epoch')
-    plt.ylabel('Dice系数')
+    plt.ylabel('Dice 系数')
     plt.legend()
     plt.title('Dice vs. Epoch')
+    plt.grid(True)
+
+    plt.subplot(2, 3, 3)
+    plt.plot(history_df['epoch'], history_df['val_iou'], label='验证 IoU')
+    plt.xlabel('Epoch')
+    plt.ylabel('IoU')
+    plt.legend()
+    plt.title('验证 IoU vs. Epoch')
+    plt.grid(True)
+
+    plt.subplot(2, 3, 4)
+    plt.plot(history_df['epoch'], history_df['val_mabld'], label='验证 MABLD')
+    plt.xlabel('Epoch')
+    plt.ylabel('MABLD (pixels)')
+    plt.legend()
+    plt.title('验证 MABLD vs. Epoch')
+    plt.grid(True)
+
+    plt.subplot(2, 3, 5)
+    plt.plot(history_df['epoch'], history_df['val_hausdorff_95'], label='验证 HD95')
+    plt.xlabel('Epoch')
+    plt.ylabel('Hausdorff 95% (pixels)')
+    plt.legend()
+    plt.title('验证 HD95 vs. Epoch')
+    plt.grid(True)
+
+    plt.subplot(2, 3, 6)
+    plt.plot(history_df['epoch'], history_df['val_thickness_correlation'], label='验证层厚度相关性')
+    plt.xlabel('Epoch')
+    plt.ylabel('Pearson Correlation')
+    plt.legend()
+    plt.title('验证层厚度相关性 vs. Epoch')
+    plt.grid(True)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, 'training_history.png'))
-    plt.show()
+    plt.savefig(os.path.join(save_dir, 'training_history_metrics.png'))
+    print(f"训练历史图表已保存到 {os.path.join(save_dir, 'training_history_metrics.png')}")
+    # plt.show() # 取消注释以显示图表
+    plt.close() # 关闭图形，防止在循环或脚本中累积
 
     return model
 
@@ -484,9 +534,10 @@ def main():
     --alpha: Dice损失权重
     --beta: Focal损失权重
     --gamma: 边界损失权重
+    --num_classes: 输出通道数/类别数
 
     使用示例:
-    python train.py --batch_size 1 --num_workers 4 --epochs 20 --lr 0.001
+    python train.py --batch_size 1 --num_workers 4 --epochs 20 --lr 0.001 --num_classes 11
     """
 
     # 命令行参数解析
@@ -516,6 +567,9 @@ def main():
     parser.add_argument('--beta', type=float, default=0.5, help='Focal损失权重')
     parser.add_argument('--gamma', type=float, default=0.2, help='边界损失权重')
 
+    # 新增参数
+    parser.add_argument('--num_classes', type=int, default=11, help='输出通道数/类别数')
+
     args = parser.parse_args()
 
     # 设置随机种子
@@ -541,15 +595,14 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     # 创建模型
-    model = UNet(in_channels=args.in_channels, out_channels=args.out_channels).to(device)
+    model = UNet(in_channels=args.in_channels, out_channels=args.num_classes).to(device)
 
     # 定义复合损失函数和优化器
-    criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.out_channels).to(
-        device)
+    criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.num_classes).to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
 
     # 添加学习率调度器 (例如: 当验证 Dice 停止提升时降低学习率)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=5, verbose=True)
 
     # 打印训练配置
     print(f"\n{'=' * 20} 训练配置 {'=' * 20}")
@@ -573,7 +626,8 @@ def main():
         device=device,
         num_epochs=args.epochs,
         save_dir=args.save_dir,
-        early_stopping_patience=8
+        early_stopping_patience=8,
+        num_classes=args.num_classes
     )
 
     print('训练完成!')
