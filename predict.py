@@ -65,14 +65,21 @@ def predict_and_visualize_single(model, image_tensor, mask_tensor, output_path, 
     os.makedirs(output_path, exist_ok=True)
 
     # --- 保存结果 ---
-    cv2.imwrite(os.path.join(output_path, 'original.png'), original_img_scaled)
-    cv2.imwrite(os.path.join(output_path, 'mask_ground_truth.png'), mask_map)  # 重命名 mask.png
-    cv2.imwrite(os.path.join(output_path, 'segmentation_predicted.png'), segmentation_map)  # 重命名
-    cv2.imwrite(os.path.join(output_path, 'blend_prediction_overlay.png'), blend)  # 重命名
-    cv2.imwrite(os.path.join(output_path, 'difference_map.png'), diff_map)  # 保存差异图
+    original_save_path = os.path.join(output_path, 'original.png')
+    mask_save_path = os.path.join(output_path, 'mask_ground_truth.png')
+    segmentation_save_path = os.path.join(output_path, 'segmentation_predicted.png')
+    blend_save_path = os.path.join(output_path, 'blend_prediction_overlay.png')
+    diff_map_save_path = os.path.join(output_path, 'difference_map.png')
+    metrics_file_path = os.path.join(output_path, 'metrics.txt')
+    combined_plot_path = os.path.join(output_path, 'visualization_summary.png')
+
+    cv2.imwrite(original_save_path, original_img_scaled)
+    cv2.imwrite(mask_save_path, mask_map)
+    cv2.imwrite(segmentation_save_path, segmentation_map)
+    cv2.imwrite(blend_save_path, blend)
+    cv2.imwrite(diff_map_save_path, cv2.cvtColor(diff_map, cv2.COLOR_RGB2BGR))
 
     # 保存指标到文本文件
-    metrics_file_path = os.path.join(output_path, 'metrics.txt')
     with open(metrics_file_path, 'w') as f:
         f.write("Evaluation Metrics:\n")
         f.write("=====================\n")
@@ -80,7 +87,6 @@ def predict_and_visualize_single(model, image_tensor, mask_tensor, output_path, 
         for key, value in metrics_results.items():
             f.write(f"{key}: {value:.4f}\n" if isinstance(value, (float, np.float_)) and not np.isnan(
                 value) else f"{key}: {value if not np.isnan(value) else 'N/A'}\n")
-    print(f"Metrics saved to {metrics_file_path}")
 
     # --- 创建组合可视化图 ---
     fig, axes = plt.subplots(2, 3, figsize=(18, 10), dpi=200)  # 调整布局为 2x3
@@ -110,17 +116,15 @@ def predict_and_visualize_single(model, image_tensor, mask_tensor, output_path, 
     axes[5].axis('off')
     metrics_text = "Metrics:\n" + "\n".join([f"{k}: {v:.3f}" if isinstance(v, (float, np.float_)) and not np.isnan(
         v) else f"{k}: {v if not np.isnan(v) else 'N/A'}" for k, v in metrics_results.items()])
-    axes[5].text(0.05, 0.95, metrics_text, ha='left', va='top', fontsize=9, wrap=True,
-                 bbox=dict(boxstyle='round,pad=0.5', fc='wheat', alpha=0.5))
+    axes[5].text(0.05, 0.95, metrics_text, ha='left', va='top', fontsize=11, wrap=True,
+                 bbox=dict(boxstyle='round,pad=0.8', fc='wheat', alpha=0.5))
     axes[5].set_title('Metrics Summary')
 
     plt.tight_layout()
-    combined_plot_path = os.path.join(output_path, 'visualization_summary.png')
     plt.savefig(combined_plot_path)
-    print(f"Combined visualization saved to {combined_plot_path}")
     plt.close(fig)  # 关闭图形，防止内存泄漏
 
-    return metrics_results  # 返回该图像的指标
+    return metrics_results, metrics_file_path, combined_plot_path
 
 
 def predict_folder(model, data_loader, output_dir, device, num_classes=11):
@@ -142,12 +146,16 @@ def predict_folder(model, data_loader, output_dir, device, num_classes=11):
 
             output_path_single = os.path.join(output_dir, image_name)
 
-            # 预测、可视化并获取单图指标
-            metrics_single = predict_and_visualize_single(
+            # 预测、可视化并获取单图指标和保存路径
+            metrics_single, metrics_file_path, combined_plot_path = predict_and_visualize_single(
                 model, image, mask, output_path_single, device, num_classes
             )
             metrics_single['image_name'] = image_name  # 添加图像名到字典
             all_image_metrics.append(metrics_single)
+
+            # 使用 pbar.write() 在循环中打印日志，避免干扰进度条
+            pbar.write(f"Metrics saved to {metrics_file_path}")
+            pbar.write(f"Combined visualization saved to {combined_plot_path}")
 
     print('\n--- Individual image predictions complete ---')
 
@@ -203,15 +211,22 @@ def main():
     # 兼容旧版和新版保存的模型
     try:
         # 尝试加载 state_dict (推荐)
-        model.load_state_dict(torch.load(model_path, map_location=device))
+        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     except Exception:
         # 尝试加载包含字典的旧格式
-        checkpoint = torch.load(model_path, map_location=device)
+        checkpoint = torch.load(model_path, map_location=device, weights_only=True)
         if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
             model.load_state_dict(checkpoint['model_state_dict'])
         else:
             # 如果只是模型本身
-            model.load_state_dict(checkpoint)
+            try:
+                model.load_state_dict(checkpoint)
+            except TypeError: # Handle case where checkpoint might be the model object itself
+                print("Warning: Loaded checkpoint might be the entire model object, not state_dict. This is not recommended.")
+                # If you are sure it's the model object and compatible:
+                # model = checkpoint
+                # Or raise an error if this format is unexpected:
+                raise ValueError("Loaded checkpoint is not a state_dict or a recognized dictionary format.")
 
     print(f"模型已从 {model_path} 加载")
 
