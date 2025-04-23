@@ -1,23 +1,24 @@
+import argparse
 import os
 import random
+
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
+import torchvision
+from scipy.ndimage import distance_transform_edt
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-import matplotlib.pyplot as plt
-import torchvision
-import torch.nn.functional as F
-from scipy.ndimage import distance_transform_edt
-import argparse
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 
-from model.unet import UNet
 from model.dataset import OCTDataset
+from model.unet import UNet
 from utils.augmentation import advanced_augmentation
 
 

@@ -9,32 +9,32 @@ class UNet(nn.Module):
         # 编码器部分
         self.enc1 = self._make_encoder_block(in_channels, 64)
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
-        
+
         self.enc2 = self._make_encoder_block(64, 128)
         self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
-        
+
         self.enc3 = self._make_encoder_block(128, 256)
         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
-        
+
         self.enc4 = self._make_encoder_block(256, 512)
         self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
-        
+
         # 瓶颈部分
         self.bottleneck = self._make_encoder_block(512, 1024)
-        
+
         # 解码器部分 - 使用子像素卷积替代转置卷积
         self.upconv1 = self._make_subpixel_block(1024, 512)
         self.dec1 = self._make_decoder_block(1024, 512)
-        
+
         self.upconv2 = self._make_subpixel_block(512, 256)
         self.dec2 = self._make_decoder_block(512, 256)
-        
+
         self.upconv3 = self._make_subpixel_block(256, 128)
         self.dec3 = self._make_decoder_block(256, 128)
-        
+
         self.upconv4 = self._make_subpixel_block(128, 64)
         self.dec4 = self._make_decoder_block(128, 64)
-        
+
         # 输出层
         self.out = nn.Conv2d(64, out_channels, kernel_size=1)
 
@@ -57,7 +57,7 @@ class UNet(nn.Module):
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
-    
+
     def _make_subpixel_block(self, in_channels, out_channels):
         """
         创建子像素卷积上采样块
@@ -70,34 +70,34 @@ class UNet(nn.Module):
             # 使用PixelShuffle进行上采样，尺寸增加2倍
             nn.PixelShuffle(2)
         )
-    
+
     def forward(self, x):
         # 编码器路径
         enc1 = self.enc1(x)
         enc2 = self.enc2(self.pool1(enc1))
         enc3 = self.enc3(self.pool2(enc2))
         enc4 = self.enc4(self.pool3(enc3))
-        
+
         # 瓶颈
         bottleneck = self.bottleneck(self.pool4(enc4))
-        
+
         # 解码器路径
         dec1 = self.upconv1(bottleneck)
         dec1 = torch.cat((dec1, enc4), dim=1)
         dec1 = self.dec1(dec1)
-        
+
         dec2 = self.upconv2(dec1)
         dec2 = torch.cat((dec2, enc3), dim=1)
         dec2 = self.dec2(dec2)
-        
+
         dec3 = self.upconv3(dec2)
         dec3 = torch.cat((dec3, enc2), dim=1)
         dec3 = self.dec3(dec3)
-        
+
         dec4 = self.upconv4(dec3)
         dec4 = torch.cat((dec4, enc1), dim=1)
         dec4 = self.dec4(dec4)
-        
+
         # 输出层 - 不需要在这里应用softmax，因为使用CrossEntropyLoss会自动应用
         outputs = self.out(dec4)
         return outputs

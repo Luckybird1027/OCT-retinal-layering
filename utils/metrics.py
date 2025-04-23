@@ -1,10 +1,12 @@
+import warnings
+
+import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.ndimage import distance_transform_edt, binary_erosion, binary_dilation
+from scipy.ndimage import distance_transform_edt, binary_erosion
 from scipy.stats import pearsonr
-import cv2
-import warnings
+
 
 # --- 辅助函数 ---
 
@@ -18,17 +20,18 @@ def _get_boundary(mask, connectivity=1):
     if mask.sum() == 0:
         return np.zeros_like(mask, dtype=bool)
     eroded_mask = binary_erosion(mask, structure=np.ones((3, 3)), border_value=0)
-    boundary = mask ^ eroded_mask # XOR operation finds the boundary
+    boundary = mask ^ eroded_mask  # XOR operation finds the boundary
     return boundary
+
 
 def _one_hot_encode(target, num_classes):
     """将类别索引 target 转换为 one-hot 编码"""
-    if target.ndim == 4 and target.shape[1] == 1: # (B, 1, H, W)
-        target = target.squeeze(1) # -> (B, H, W)
-    elif target.ndim == 3: # (B, H, W)
+    if target.ndim == 4 and target.shape[1] == 1:  # (B, 1, H, W)
+        target = target.squeeze(1)  # -> (B, H, W)
+    elif target.ndim == 3:  # (B, H, W)
         pass
-    elif target.ndim == 2: # (H, W)
-        target = target.unsqueeze(0) # -> (1, H, W)
+    elif target.ndim == 2:  # (H, W)
+        target = target.unsqueeze(0)  # -> (1, H, W)
     else:
         raise ValueError(f"Unsupported target shape: {target.shape}")
 
@@ -62,7 +65,7 @@ def dice_coefficient(pred_indices, target_indices, num_classes, ignore_index=0, 
     if isinstance(target_indices, torch.Tensor):
         target_indices = target_indices.detach().cpu().numpy()
 
-    if pred_indices.ndim == 2: # Add batch dimension if missing
+    if pred_indices.ndim == 2:  # Add batch dimension if missing
         pred_indices = np.expand_dims(pred_indices, axis=0)
     if target_indices.ndim == 2:
         target_indices = np.expand_dims(target_indices, axis=0)
@@ -82,14 +85,14 @@ def dice_coefficient(pred_indices, target_indices, num_classes, ignore_index=0, 
         cardinality = np.sum(pred_c, axis=(1, 2)) + np.sum(target_c, axis=(1, 2))
 
         dice = (2. * intersection + epsilon) / (cardinality + epsilon)
-        dice_scores.append(dice) # Shape: [num_valid_classes, B]
+        dice_scores.append(dice)  # Shape: [num_valid_classes, B]
 
     # Average over classes and then over batch
-    if not dice_scores: # Handle case where only ignore_index exists
-         warnings.warn("No valid classes found for Dice calculation (excluding ignore_index). Returning 0.0")
-         return 0.0
-    mean_dice_per_batch = np.mean(dice_scores, axis=0) # Average over classes for each batch item
-    mean_dice = np.mean(mean_dice_per_batch) # Average over batch
+    if not dice_scores:  # Handle case where only ignore_index exists
+        warnings.warn("No valid classes found for Dice calculation (excluding ignore_index). Returning 0.0")
+        return 0.0
+    mean_dice_per_batch = np.mean(dice_scores, axis=0)  # Average over classes for each batch item
+    mean_dice = np.mean(mean_dice_per_batch)  # Average over batch
 
     return float(mean_dice)
 
@@ -109,7 +112,7 @@ def intersection_over_union(pred_indices, target_indices, num_classes, ignore_in
     if isinstance(target_indices, torch.Tensor):
         target_indices = target_indices.detach().cpu().numpy()
 
-    if pred_indices.ndim == 2: # Add batch dimension if missing
+    if pred_indices.ndim == 2:  # Add batch dimension if missing
         pred_indices = np.expand_dims(pred_indices, axis=0)
     if target_indices.ndim == 2:
         target_indices = np.expand_dims(target_indices, axis=0)
@@ -129,14 +132,14 @@ def intersection_over_union(pred_indices, target_indices, num_classes, ignore_in
         union = np.sum(pred_c, axis=(1, 2)) + np.sum(target_c, axis=(1, 2)) - intersection
 
         iou = (intersection + epsilon) / (union + epsilon)
-        iou_scores.append(iou) # Shape: [num_valid_classes, B]
+        iou_scores.append(iou)  # Shape: [num_valid_classes, B]
 
     # Average over classes and then over batch
     if not iou_scores:
         warnings.warn("No valid classes found for IoU calculation (excluding ignore_index). Returning 0.0")
         return 0.0
-    mean_iou_per_batch = np.mean(iou_scores, axis=0) # Average over classes for each batch item
-    mean_iou = np.mean(mean_iou_per_batch) # Average over batch
+    mean_iou_per_batch = np.mean(iou_scores, axis=0)  # Average over classes for each batch item
+    mean_iou = np.mean(mean_iou_per_batch)  # Average over batch
 
     return float(mean_iou)
 
@@ -175,7 +178,7 @@ def mean_absolute_border_location_deviation(pred_indices, target_indices, num_cl
         # 这里我们选择跳过，避免影响平均值
         if np.sum(pred_boundary) == 0 or np.sum(target_boundary) == 0:
             # warnings.warn(f"Boundary calculation failed or empty for class {c}. Skipping MABLD calculation for this class.")
-            continue # 或者可以赋一个较大的惩罚值
+            continue  # 或者可以赋一个较大的惩罚值
 
         # 计算从 pred 边界到 target 边界的距离
         dist_transform_target_inv = distance_transform_edt(np.logical_not(target_boundary))
@@ -196,7 +199,7 @@ def mean_absolute_border_location_deviation(pred_indices, target_indices, num_cl
 
     if valid_classes == 0:
         warnings.warn("No valid classes found for MABLD calculation. Returning NaN.")
-        return np.nan # Or a large value like float('inf')
+        return np.nan  # Or a large value like float('inf')
     else:
         return total_mabld / valid_classes
 
@@ -234,7 +237,7 @@ def hausdorff_distance_95(pred_indices, target_indices, num_classes, ignore_inde
         # 如果任一边界为空，则无法计算距离
         if np.sum(pred_boundary) == 0 or np.sum(target_boundary) == 0:
             # warnings.warn(f"Boundary calculation failed or empty for class {c}. Skipping Hausdorff calculation for this class.")
-            continue # 或者可以赋一个较大的惩罚值
+            continue  # 或者可以赋一个较大的惩罚值
 
         # 计算从 pred 边界到 target 边界的距离
         dist_transform_target_inv = distance_transform_edt(np.logical_not(target_boundary))
@@ -247,16 +250,16 @@ def hausdorff_distance_95(pred_indices, target_indices, num_classes, ignore_inde
         # 合并所有距离并计算 95% 分位数
         all_distances = np.concatenate((dist_pred_to_target, dist_target_to_pred))
         if len(all_distances) == 0:
-             hausdorff_95_c = 0 # Or handle as error/warning
+            hausdorff_95_c = 0  # Or handle as error/warning
         else:
-             hausdorff_95_c = np.percentile(all_distances, 95)
+            hausdorff_95_c = np.percentile(all_distances, 95)
 
         total_hausdorff_95 += hausdorff_95_c
         valid_classes += 1
 
     if valid_classes == 0:
         warnings.warn("No valid classes found for Hausdorff 95 calculation. Returning NaN.")
-        return np.nan # Or a large value
+        return np.nan  # Or a large value
     else:
         return total_hausdorff_95 / valid_classes
 
@@ -287,7 +290,7 @@ def layer_thickness_correlation(pred_indices, target_indices, num_classes, ignor
     # 找到每个类别（层）的上边界 y 坐标
     for c in range(num_classes):
         if c == ignore_index: continue
-        boundaries_pred[c] = np.full(w, h, dtype=int) # 初始化为图像底部
+        boundaries_pred[c] = np.full(w, h, dtype=int)  # 初始化为图像底部
         boundaries_target[c] = np.full(w, h, dtype=int)
         for col in range(w):
             pred_col = np.where(pred_indices[:, col] == c)[0]
@@ -298,7 +301,7 @@ def layer_thickness_correlation(pred_indices, target_indices, num_classes, ignor
                 boundaries_target[c][col] = np.min(target_col)
 
     # 计算每层的厚度并计算相关性
-    for c in range(1, num_classes -1): # 遍历内部层 (假设层按顺序)
+    for c in range(1, num_classes - 1):  # 遍历内部层 (假设层按顺序)
         # 上边界是当前层 c 的上边界
         upper_bound_pred = boundaries_pred.get(c)
         upper_bound_target = boundaries_target.get(c)
@@ -308,8 +311,8 @@ def layer_thickness_correlation(pred_indices, target_indices, num_classes, ignor
         lower_bound_target = boundaries_target.get(c + 1)
 
         if upper_bound_pred is None or lower_bound_pred is None or \
-           upper_bound_target is None or lower_bound_target is None:
-            continue # 如果缺少边界信息，跳过该层
+                upper_bound_target is None or lower_bound_target is None:
+            continue  # 如果缺少边界信息，跳过该层
 
         # 计算厚度 (只在上下边界都有效的地方计算)
         valid_cols = (upper_bound_pred < h) & (lower_bound_pred < h) & \
@@ -317,7 +320,7 @@ def layer_thickness_correlation(pred_indices, target_indices, num_classes, ignor
                      (lower_bound_pred > upper_bound_pred) & \
                      (lower_bound_target > upper_bound_target)
 
-        if np.sum(valid_cols) < 2: # 需要至少两个点来计算相关性
+        if np.sum(valid_cols) < 2:  # 需要至少两个点来计算相关性
             # warnings.warn(f"Not enough valid columns to calculate thickness correlation for class {c}.")
             continue
 
@@ -331,14 +334,12 @@ def layer_thickness_correlation(pred_indices, target_indices, num_classes, ignor
             # all_correlations.append(1.0 if np.allclose(thickness_pred, thickness_target) else 0.0)
             continue
 
-
         # 计算 Pearson 相关系数
         corr, p_value = pearsonr(thickness_pred, thickness_target)
         if not np.isnan(corr):
             all_correlations.append(corr)
         # else:
-            # warnings.warn(f"NaN correlation calculated for class {c}. Skipping.")
-
+        # warnings.warn(f"NaN correlation calculated for class {c}. Skipping.")
 
     if not all_correlations:
         warnings.warn("No valid layer thickness correlations could be calculated. Returning NaN.")
@@ -374,11 +375,12 @@ def breakpoint_density(pred_indices, num_classes, ignore_index=0, connectivity=1
 
         # 使用 connected components 查找断开的区域
         # num_labels > 1 表示存在断裂
-        num_labels, labels_im = cv2.connectedComponents(pred_c.astype(np.uint8), connectivity=4 if connectivity==1 else 8) # connectivity 4 or 8
+        num_labels, labels_im = cv2.connectedComponents(pred_c.astype(np.uint8),
+                                                        connectivity=4 if connectivity == 1 else 8)  # connectivity 4 or 8
 
         # 断裂点数量近似为 (组件数 - 1)
         # 归一化：除以该类别的像素总数或周长可能更合理，这里用组件数作为简化指标
-        breakpoints = max(0, num_labels - 1 -1) # -1 for background label, -1 because 1 component means no breaks
+        breakpoints = max(0, num_labels - 1 - 1)  # -1 for background label, -1 because 1 component means no breaks
 
         # 简单的密度：断点数 / 类别像素数 (避免除零)
         # 更复杂的密度可能需要计算边界长度
@@ -389,11 +391,11 @@ def breakpoint_density(pred_indices, num_classes, ignore_index=0, connectivity=1
         valid_classes += 1
 
     if valid_classes == 0:
-        return 0.0 # No valid classes to calculate density for
+        return 0.0  # No valid classes to calculate density for
     else:
         # 返回的是平均每个像素的断点数，值会很小
         # 或者可以返回总断点数 / 总像素数
-        return total_density / valid_classes # Average density across classes
+        return total_density / valid_classes  # Average density across classes
 
 
 def intersection_count(pred_indices, num_classes, ignore_index=0):
@@ -415,22 +417,22 @@ def intersection_count(pred_indices, num_classes, ignore_index=0):
             if pixel_val == ignore_index: continue
 
             # 检查邻域（例如3x3）是否存在其他非背景类别
-            neighborhood = pred_indices[max(0, r-1):min(pred_indices.shape[0], r+2),
-                                        max(0, col-1):min(pred_indices.shape[1], col+2)]
+            neighborhood = pred_indices[max(0, r - 1):min(pred_indices.shape[0], r + 2),
+                           max(0, col - 1):min(pred_indices.shape[1], col + 2)]
             unique_labels = np.unique(neighborhood)
             non_bg_labels = [label for label in unique_labels if label != ignore_index]
 
             # 如果邻域包含多于一个非背景类别，则认为可能存在交叉
             if len(non_bg_labels) > 1:
-                 # 更精确的方法是检查边界像素是否同时接触两个不同类别
-                 # 简化：如果像素本身属于一个类，但其邻域包含另一个类，计数
-                 other_labels_in_neighbor = [l for l in non_bg_labels if l != pixel_val]
-                 if len(other_labels_in_neighbor) > 0:
-                     intersection_pixels += 1
-                     # 为避免重复计数，可以将此像素标记为已处理或仅计数一次
+                # 更精确的方法是检查边界像素是否同时接触两个不同类别
+                # 简化：如果像素本身属于一个类，但其邻域包含另一个类，计数
+                other_labels_in_neighbor = [l for l in non_bg_labels if l != pixel_val]
+                if len(other_labels_in_neighbor) > 0:
+                    intersection_pixels += 1
+                    # 为避免重复计数，可以将此像素标记为已处理或仅计数一次
 
     # 返回总交叉像素数（这是一个粗略估计）
-    return intersection_pixels // 2 # 每个交叉点可能被邻域检查两次
+    return intersection_pixels // 2  # 每个交叉点可能被邻域检查两次
 
 
 # --- 主评估函数 ---
@@ -470,8 +472,8 @@ def calculate_all_metrics(pred_indices, target_indices, num_classes, ignore_inde
         pred_single = pred_batch[i]
         target_single = target_batch[i]
 
-        with warnings.catch_warnings(): # Suppress warnings during calculation if desired
-            warnings.simplefilter("ignore", category=RuntimeWarning) # Ignore mean of empty slice etc.
+        with warnings.catch_warnings():  # Suppress warnings during calculation if desired
+            warnings.simplefilter("ignore", category=RuntimeWarning)  # Ignore mean of empty slice etc.
             mabld = mean_absolute_border_location_deviation(pred_single, target_single, num_classes, ignore_index)
             hd95 = hausdorff_distance_95(pred_single, target_single, num_classes, ignore_index)
             thick_corr = layer_thickness_correlation(pred_single, target_single, num_classes, ignore_index)
@@ -484,7 +486,6 @@ def calculate_all_metrics(pred_indices, target_indices, num_classes, ignore_inde
         if not np.isnan(thick_corr): thickness_corr_list.append(thick_corr)
         # breakpoint_list.append(breakpoints)
         # intersection_list.append(intersections)
-
 
     # Average metrics over the batch
     metrics['mabld'] = np.mean(mabld_list) if mabld_list else np.nan

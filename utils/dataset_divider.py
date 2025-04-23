@@ -1,6 +1,7 @@
 import os
-from PIL import Image
+
 import numpy as np
+from PIL import Image
 from numpy.random import shuffle
 
 from utils.mat.mat_data_transformer import load_and_slice_mat_data

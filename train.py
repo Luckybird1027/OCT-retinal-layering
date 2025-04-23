@@ -4,21 +4,20 @@ import random
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import torchvision
 from scipy.ndimage import distance_transform_edt
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-import pandas as pd
 
 from model.dataset import OCTDataset
 from model.unet import UNet
 from utils.augmentation import advanced_augmentation
-from utils.metrics import calculate_all_metrics, dice_coefficient as metrics_dice # 重命名以区分
+from utils.metrics import calculate_all_metrics, dice_coefficient as metrics_dice  # 重命名以区分
 from utils.visualization import create_visualization_grid
 
 # 设置matplotlib支持中文
@@ -234,7 +233,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         fixed_val_batch = next(iter(val_loader))
     except StopIteration:
         print("警告：验证数据加载器为空，无法获取用于可视化的固定批次。")
-        fixed_val_batch = None # 或者处理这种情况
+        fixed_val_batch = None  # 或者处理这种情况
 
     for epoch in range(num_epochs):
         history['epoch'].append(epoch + 1)
@@ -258,8 +257,9 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             optimizer.step()
 
             with torch.no_grad():
-                 pred_indices = torch.argmax(outputs, dim=1)
-                 dice_train_batch = metrics_dice(pred_indices.cpu().numpy(), masks.cpu().numpy(), num_classes=num_classes, ignore_index=0)
+                pred_indices = torch.argmax(outputs, dim=1)
+                dice_train_batch = metrics_dice(pred_indices.cpu().numpy(), masks.cpu().numpy(),
+                                                num_classes=num_classes, ignore_index=0)
 
             train_loss_epoch += loss.item()
             train_dice_epoch += dice_train_batch
@@ -271,7 +271,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
                                     'dice_loss': loss_components["dice_loss"].item(),
                                     'focal_loss': loss_components["focal_loss"].item(),
                                     'edge_loss': loss_components["edge_loss"].item(),
-                                    'dice': dice_train_batch}) # 显示批次 dice
+                                    'dice': dice_train_batch})  # 显示批次 dice
 
         # 计算平均训练损失和Dice系数
         avg_train_loss = train_loss_epoch / len(train_loader)
@@ -297,11 +297,11 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         with torch.no_grad():
             for images, masks in val_pbar:
                 images = images.to(device)
-                masks = masks.to(device) # masks shape (B, H, W)
+                masks = masks.to(device)  # masks shape (B, H, W)
 
-                outputs = model(images) # outputs shape (B, C, H, W)
+                outputs = model(images)  # outputs shape (B, C, H, W)
                 loss, loss_components = criterion(outputs, masks)
-                pred_indices = torch.argmax(outputs, dim=1) # pred_indices shape (B, H, W)
+                pred_indices = torch.argmax(outputs, dim=1)  # pred_indices shape (B, H, W)
 
                 val_loss_epoch += loss.item()
                 val_dice_loss_epoch += loss_components["dice_loss"].item()
@@ -319,8 +319,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
                 # 收集批次指标 (加权)
                 for key, value in batch_metrics.items():
                     if key in all_val_metrics and not np.isnan(value):
-                         # 乘以实际有效的样本数（如果批次不完整）
-                         all_val_metrics[key].append(value * images.size(0))
+                        # 乘以实际有效的样本数（如果批次不完整）
+                        all_val_metrics[key].append(value * images.size(0))
 
                 val_pbar.set_postfix({'loss': loss.item(), 'dice': batch_metrics.get('dice', 0.0)})
 
@@ -328,10 +328,9 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         num_val_samples = len(val_loader.dataset)
         avg_val_metrics = {}
         for key, values in all_val_metrics.items():
-             total_value = sum(v for v in values if not np.isnan(v))
-             # 使用实际样本数进行平均
-             avg_val_metrics[key] = total_value / num_val_samples if num_val_samples > 0 else 0.0
-
+            total_value = sum(v for v in values if not np.isnan(v))
+            # 使用实际样本数进行平均
+            avg_val_metrics[key] = total_value / num_val_samples if num_val_samples > 0 else 0.0
 
         avg_val_loss = val_loss_epoch / len(val_loader)
         avg_val_dice_loss = val_dice_loss_epoch / len(val_loader)
@@ -347,7 +346,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         history['val_thickness_correlation'].append(avg_val_metrics.get('thickness_correlation', np.nan))
         # history['val_breakpoint_density'].append(avg_val_metrics.get('breakpoint_density', 0.0))
         # history['val_intersection_count'].append(avg_val_metrics.get('intersection_count', 0.0))
-
 
         # --- TensorBoard 记录 ---
         writer.add_scalar('Loss/train', avg_train_loss, epoch)
@@ -388,28 +386,30 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             # mask_tensor: (B, H, W) on CPU, indices
             # pred_tensor: (B, H, W) on CPU, indices
             visualization_grid = create_visualization_grid(
-                image_tensor=images_vis.cpu(), # 确保在 CPU 上
-                mask_tensor=masks_vis.cpu(),   # 确保在 CPU 上
-                pred_tensor=predictions_vis.cpu(), # 确保在 CPU 上
+                image_tensor=images_vis.cpu(),  # 确保在 CPU 上
+                mask_tensor=masks_vis.cpu(),  # 确保在 CPU 上
+                pred_tensor=predictions_vis.cpu(),  # 确保在 CPU 上
                 num_classes=num_classes,
-                max_images=4 # 最多显示 4 张图的对比
+                max_images=4  # 最多显示 4 张图的对比
             )
             writer.add_image('Validation_Samples/Visualization', visualization_grid, epoch)
-
 
         # --- 打印当前 epoch 结果 (包含新指标) ---
         print(f'Epoch {epoch + 1}/{num_epochs}:')
         print(f'  学习率: {optimizer.param_groups[0]["lr"]:.6f}')
         print(f'  训练 - Loss: {avg_train_loss:.4f}, Dice: {avg_train_dice:.4f}')
-        print(f'         DiceLoss: {avg_train_dice_loss:.4f}, FocalLoss: {avg_train_focal_loss:.4f}, EdgeLoss: {avg_train_edge_loss:.4f}')
+        print(
+            f'         DiceLoss: {avg_train_dice_loss:.4f}, FocalLoss: {avg_train_focal_loss:.4f}, EdgeLoss: {avg_train_edge_loss:.4f}')
         # 打印时格式化 NaN
         mabld_str = f"{history['val_mabld'][-1]:.4f}" if not np.isnan(history['val_mabld'][-1]) else "N/A"
         hd95_str = f"{history['val_hausdorff_95'][-1]:.4f}" if not np.isnan(history['val_hausdorff_95'][-1]) else "N/A"
-        thick_corr_str = f"{history['val_thickness_correlation'][-1]:.4f}" if not np.isnan(history['val_thickness_correlation'][-1]) else "N/A"
-        print(f'  验证 - Loss: {avg_val_loss:.4f}, Dice: {history["val_dice"][-1]:.4f}, IoU: {history["val_iou"][-1]:.4f}')
+        thick_corr_str = f"{history['val_thickness_correlation'][-1]:.4f}" if not np.isnan(
+            history['val_thickness_correlation'][-1]) else "N/A"
+        print(
+            f'  验证 - Loss: {avg_val_loss:.4f}, Dice: {history["val_dice"][-1]:.4f}, IoU: {history["val_iou"][-1]:.4f}')
         print(f'         MABLD: {mabld_str}, HD95: {hd95_str}, ThickCorr: {thick_corr_str}')
-        print(f'         DiceLoss: {avg_val_dice_loss:.4f}, FocalLoss: {avg_val_focal_loss:.4f}, EdgeLoss: {avg_val_edge_loss:.4f}')
-
+        print(
+            f'         DiceLoss: {avg_val_dice_loss:.4f}, FocalLoss: {avg_val_focal_loss:.4f}, EdgeLoss: {avg_val_edge_loss:.4f}')
 
         # --- 更新学习率调度器 (基于验证 Dice) ---
         current_val_dice = history['val_dice'][-1]
@@ -426,7 +426,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             epochs_no_improve += 1
             print(f'---> 验证 Dice 未提升，连续 {epochs_no_improve} 个 epochs.')
             if epochs_no_improve >= early_stopping_patience:
-                print(f'---> 早停触发！连续 {early_stopping_patience} 个 epochs 验证 Dice 未提升。最佳模型在 Epoch {best_epoch}，Dice 为 {best_val_dice:.4f}')
+                print(
+                    f'---> 早停触发！连续 {early_stopping_patience} 个 epochs 验证 Dice 未提升。最佳模型在 Epoch {best_epoch}，Dice 为 {best_val_dice:.4f}')
                 break
 
         # 每个epoch保存一次模型
@@ -449,10 +450,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
 
     # --- 绘制训练过程 (包含新指标) ---
     history_df = pd.DataFrame(history)
-    history_df.to_csv(os.path.join(save_dir, 'training_history.csv'), index=False) # 保存历史记录
+    history_df.to_csv(os.path.join(save_dir, 'training_history.csv'), index=False)  # 保存历史记录
 
     # 绘制 Loss 和 Dice
-    plt.figure(figsize=(18, 12), dpi=150) # 增加画布大小
+    plt.figure(figsize=(18, 12), dpi=150)  # 增加画布大小
 
     plt.subplot(2, 3, 1)
     plt.plot(history_df['epoch'], history_df['train_loss'], label='训练损失')
@@ -508,7 +509,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
     plt.savefig(os.path.join(save_dir, 'training_history_metrics.png'))
     print(f"训练历史图表已保存到 {os.path.join(save_dir, 'training_history_metrics.png')}")
     # plt.show() # 取消注释以显示图表
-    plt.close() # 关闭图形，防止在循环或脚本中累积
+    plt.close()  # 关闭图形，防止在循环或脚本中累积
 
     return model
 
@@ -598,7 +599,8 @@ def main():
     model = UNet(in_channels=args.in_channels, out_channels=args.num_classes).to(device)
 
     # 定义复合损失函数和优化器
-    criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.num_classes).to(device)
+    criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.num_classes).to(
+        device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
 
     # 添加学习率调度器 (例如: 当验证 Dice 停止提升时降低学习率)

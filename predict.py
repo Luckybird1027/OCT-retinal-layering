@@ -1,16 +1,17 @@
 import os
+
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd  # 用于处理和显示表格
 import torch
 from tqdm import tqdm
-import csv # 用于写入 CSV
-import pandas as pd # 用于处理和显示表格
 
-from model.unet import UNet
 from model.dataset import create_dataloader
+from model.unet import UNet
 from utils.metrics import calculate_all_metrics
 from utils.visualization import generate_color_map, create_difference_map
+
 
 # 设置matplotlib支持中文 (如果需要)
 # plt.rcParams['font.sans-serif'] = ['SimHei']
@@ -25,13 +26,13 @@ def predict_and_visualize_single(model, image_tensor, mask_tensor, output_path, 
         # mask_tensor = mask_tensor.to(device) # mask 仅用于评估，可以在 CPU 上处理
 
         # 预测
-        output = model(image_tensor) # (1, C, H, W)
+        output = model(image_tensor)  # (1, C, H, W)
         output = torch.softmax(output, dim=1)
-        pred_indices = torch.argmax(output, dim=1).squeeze().cpu().numpy() # (H, W)
+        pred_indices = torch.argmax(output, dim=1).squeeze().cpu().numpy()  # (H, W)
 
-    mask_indices = mask_tensor.squeeze().cpu().numpy() # (H, W)
+    mask_indices = mask_tensor.squeeze().cpu().numpy()  # (H, W)
     # 注意：image_tensor 已经是 [0, 1] 范围的 float tensor
-    image_np = image_tensor.squeeze().cpu().numpy() # (H, W)
+    image_np = image_tensor.squeeze().cpu().numpy()  # (H, W)
 
     # --- 计算指标 ---
     metrics_results = calculate_all_metrics(pred_indices, mask_indices, num_classes=num_classes, ignore_index=0)
@@ -65,10 +66,10 @@ def predict_and_visualize_single(model, image_tensor, mask_tensor, output_path, 
 
     # --- 保存结果 ---
     cv2.imwrite(os.path.join(output_path, 'original.png'), original_img_scaled)
-    cv2.imwrite(os.path.join(output_path, 'mask_ground_truth.png'), mask_map) # 重命名 mask.png
-    cv2.imwrite(os.path.join(output_path, 'segmentation_predicted.png'), segmentation_map) # 重命名
-    cv2.imwrite(os.path.join(output_path, 'blend_prediction_overlay.png'), blend) # 重命名
-    cv2.imwrite(os.path.join(output_path, 'difference_map.png'), diff_map) # 保存差异图
+    cv2.imwrite(os.path.join(output_path, 'mask_ground_truth.png'), mask_map)  # 重命名 mask.png
+    cv2.imwrite(os.path.join(output_path, 'segmentation_predicted.png'), segmentation_map)  # 重命名
+    cv2.imwrite(os.path.join(output_path, 'blend_prediction_overlay.png'), blend)  # 重命名
+    cv2.imwrite(os.path.join(output_path, 'difference_map.png'), diff_map)  # 保存差异图
 
     # 保存指标到文本文件
     metrics_file_path = os.path.join(output_path, 'metrics.txt')
@@ -77,12 +78,13 @@ def predict_and_visualize_single(model, image_tensor, mask_tensor, output_path, 
         f.write("=====================\n")
         # 格式化 NaN 值为 'N/A' 或其他标识符
         for key, value in metrics_results.items():
-             f.write(f"{key}: {value:.4f}\n" if isinstance(value, (float, np.float_)) and not np.isnan(value) else f"{key}: {value if not np.isnan(value) else 'N/A'}\n")
+            f.write(f"{key}: {value:.4f}\n" if isinstance(value, (float, np.float_)) and not np.isnan(
+                value) else f"{key}: {value if not np.isnan(value) else 'N/A'}\n")
     print(f"Metrics saved to {metrics_file_path}")
 
     # --- 创建组合可视化图 ---
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10), dpi=200) # 调整布局为 2x3
-    axes = axes.ravel() # 展平以便索引
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10), dpi=200)  # 调整布局为 2x3
+    axes = axes.ravel()  # 展平以便索引
 
     axes[0].imshow(original_img_scaled, cmap='gray')
     axes[0].set_title('Original Image')
@@ -106,7 +108,8 @@ def predict_and_visualize_single(model, image_tensor, mask_tensor, output_path, 
 
     # 在最后一个子图中显示指标文本
     axes[5].axis('off')
-    metrics_text = "Metrics:\n" + "\n".join([f"{k}: {v:.3f}" if isinstance(v, (float, np.float_)) and not np.isnan(v) else f"{k}: {v if not np.isnan(v) else 'N/A'}" for k, v in metrics_results.items()])
+    metrics_text = "Metrics:\n" + "\n".join([f"{k}: {v:.3f}" if isinstance(v, (float, np.float_)) and not np.isnan(
+        v) else f"{k}: {v if not np.isnan(v) else 'N/A'}" for k, v in metrics_results.items()])
     axes[5].text(0.05, 0.95, metrics_text, ha='left', va='top', fontsize=9, wrap=True,
                  bbox=dict(boxstyle='round,pad=0.5', fc='wheat', alpha=0.5))
     axes[5].set_title('Metrics Summary')
@@ -115,9 +118,9 @@ def predict_and_visualize_single(model, image_tensor, mask_tensor, output_path, 
     combined_plot_path = os.path.join(output_path, 'visualization_summary.png')
     plt.savefig(combined_plot_path)
     print(f"Combined visualization saved to {combined_plot_path}")
-    plt.close(fig) # 关闭图形，防止内存泄漏
+    plt.close(fig)  # 关闭图形，防止内存泄漏
 
-    return metrics_results # 返回该图像的指标
+    return metrics_results  # 返回该图像的指标
 
 
 def predict_folder(model, data_loader, output_dir, device, num_classes=11):
@@ -125,8 +128,8 @@ def predict_folder(model, data_loader, output_dir, device, num_classes=11):
     # 创建输出目录
     os.makedirs(output_dir, exist_ok=True)
 
-    all_image_metrics = [] # 存储每个图像的指标字典
-    image_names_list = [] # 存储图像名称或索引
+    all_image_metrics = []  # 存储每个图像的指标字典
+    image_names_list = []  # 存储图像名称或索引
 
     model.eval()
     with torch.no_grad():
@@ -134,7 +137,7 @@ def predict_folder(model, data_loader, output_dir, device, num_classes=11):
         for i, (image, mask) in enumerate(pbar):
             # 假设 data_loader 返回原始图像名或索引，如果不是，则生成一个
             # image_name = data_loader.dataset.img_files[i] # 如果数据集暴露了这个信息
-            image_name = f'image_{i:04d}' # 否则使用索引
+            image_name = f'image_{i:04d}'  # 否则使用索引
             image_names_list.append(image_name)
 
             output_path_single = os.path.join(output_dir, image_name)
@@ -143,7 +146,7 @@ def predict_folder(model, data_loader, output_dir, device, num_classes=11):
             metrics_single = predict_and_visualize_single(
                 model, image, mask, output_path_single, device, num_classes
             )
-            metrics_single['image_name'] = image_name # 添加图像名到字典
+            metrics_single['image_name'] = image_name  # 添加图像名到字典
             all_image_metrics.append(metrics_single)
 
     print('\n--- Individual image predictions complete ---')
@@ -186,14 +189,14 @@ def main():
     print(f'使用设备: {device}')
 
     # --- 配置参数 --- (可以替换为 argparse)
-    model_path = 'train/checkpoints/best_model.pth' # 或者 'final_model.pth'
+    model_path = 'train/checkpoints/best_model.pth'  # 或者 'final_model.pth'
     predict_images_dir = 'data/SJTU/test/img'
     predict_masks_dir = 'data/SJTU/test/mask'
     output_results_dir = 'results/predictions_with_metrics'
-    batch_size = 1 # 评估时通常 batch_size=1
-    num_classes = 11 # 确保与模型训练时一致
-    img_size = (720, 992) # 确保与模型训练/数据集定义一致
-    preprocess_in_loader = True # 是否在 dataloader 中进行预处理
+    batch_size = 1  # 评估时通常 batch_size=1
+    num_classes = 11  # 确保与模型训练时一致
+    img_size = (720, 992)  # 确保与模型训练/数据集定义一致
+    preprocess_in_loader = True  # 是否在 dataloader 中进行预处理
 
     # 加载模型
     model = UNet(in_channels=1, out_channels=num_classes).to(device)
@@ -208,8 +211,8 @@ def main():
             model.load_state_dict(checkpoint['model_state_dict'])
         else:
             # 如果只是模型本身
-             model.load_state_dict(checkpoint)
-             
+            model.load_state_dict(checkpoint)
+
     print(f"模型已从 {model_path} 加载")
 
     # 创建数据加载器 (确保使用与训练匹配的设置，特别是 img_size 和 preprocess)
@@ -220,10 +223,9 @@ def main():
         img_size=img_size,
         batch_size=batch_size,
         shuffle=False,
-        preprocess=preprocess_in_loader # 确保与训练时一致
+        preprocess=preprocess_in_loader  # 确保与训练时一致
     )
     print(f"数据加载器已创建，共 {len(data_loader.dataset)} 张图像")
-
 
     # 预测文件夹中的所有图像并进行评估
     predict_folder(model, data_loader, output_results_dir, device, num_classes)
