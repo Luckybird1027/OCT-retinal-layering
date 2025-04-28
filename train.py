@@ -53,7 +53,7 @@ class CompoundLoss(nn.Module):
     """
 
     def __init__(self, alpha=1.0, beta=1.0, gamma=1.0, num_classes=11, edge_weight=0.5, focal_gamma=2.0,
-                 focal_alpha=0.25):
+                 focal_alpha=0.25, ignore_index=0):
         super(CompoundLoss, self).__init__()
         self.alpha = alpha
         self.beta = beta
@@ -62,6 +62,7 @@ class CompoundLoss(nn.Module):
         self.edge_weight = edge_weight
         self.focal_gamma = focal_gamma
         self.focal_alpha = focal_alpha
+        self.ignore_index = ignore_index
 
     def forward(self, inputs, targets):
         # 计算Dice损失
@@ -83,38 +84,59 @@ class CompoundLoss(nn.Module):
 
     def dice_loss(self, inputs, targets, epsilon=1e-6):
         """
-        计算多类别Dice损失
+        计算多类别Dice损失 (忽略背景类)
         """
         # 转换预测为概率分布
         probs = F.softmax(inputs, dim=1)
 
-        # 计算每个类别的Dice损失
-        dice_score = 0.0
         # 检查 targets 是否为空，避免在空 batch 上计算
         if targets.numel() == 0:
             return torch.tensor(0.0, device=inputs.device, requires_grad=True)
 
+        dice_score = 0.0
+        num_valid_classes = 0 # 计数器，用于统计参与计算的有效类别数
+
         for class_idx in range(self.num_classes):
+            # 跳过要忽略的类别 (背景类)
+            if class_idx == self.ignore_index:
+                continue
+
             # 获取当前类别的概率
             prob_class = probs[:, class_idx]
 
             # 获取当前类别的目标（one-hot）
             target_class = (targets == class_idx).float()
 
+            # 重要：仅对在 target 中实际存在的类别计算 Dice，避免影响平均值
+            # 检查当前类别在整个批次中是否存在
+            # 如果一个类别在整个批次的目标掩码中都不存在，我们跳过它
+            # 否则，即使某些样本没有这个类别，我们仍然计算并平均
+            if target_class.sum() == 0:
+                 # print(f"警告: 类别 {class_idx} 在当前批次的目标中不存在，跳过 Dice Loss 计算。")
+                 continue # 跳过这个类别
+
+            num_valid_classes += 1 # 这是一个有效的，需要计算的类别
+
             # 计算交集
             intersection = (prob_class * target_class).sum(dim=(1, 2))
 
             # 计算并集
-            cardinality = prob_class.sum(dim=(1, 2)) + target_class.sum(dim=(1, 2)) + epsilon
+            cardinality = prob_class.sum(dim=(1, 2)) + target_class.sum(dim=(1, 2)) # 注意：这里的分母没有 epsilon
 
-            # 计算Dice系数
-            dice = (2. * intersection + epsilon) / cardinality
+            # 计算Dice系数 - 对批次中的每个样本计算
+            dice = (2. * intersection + epsilon) / (cardinality + epsilon) # 在最终计算时加 epsilon
 
-            # 累加每个类别的Dice系数
+            # 累加每个类别的平均Dice系数 (在批次维度上求平均)
             dice_score += dice.mean() # 对批次内样本求平均
 
-        # 计算平均Dice系数并转换为损失
-        avg_dice = dice_score / self.num_classes
+        # 如果没有任何有效类别（例如，mask 全是背景或只包含 ignore_index），则损失为0
+        if num_valid_classes == 0:
+             # print(f"警告: 在当前批次中未找到任何有效的非忽略类别，Dice Loss 设为 0。")
+             return torch.tensor(0.0, device=inputs.device, requires_grad=True)
+
+
+        # 计算平均 Dice 系数（仅基于有效类别）并转换为损失
+        avg_dice = dice_score / num_valid_classes
         return 1.0 - avg_dice
 
     def focal_loss(self, inputs, targets):
@@ -132,6 +154,12 @@ class CompoundLoss(nn.Module):
         probs = F.softmax(inputs, dim=1)
 
         # 应用focal loss公式: -alpha * (1-pt)^gamma * log(pt)
+        # 注意：Focal Loss 本身不直接处理 ignore_index，它通过 one-hot 编码和 pt 的计算隐式处理。
+        # 如果某个像素的 target 是 ignore_index，它在 one-hot 中不会有对应的 1，
+        # pt 的计算会涉及所有非 ignore 类的概率。
+        # 但标准的 Focal Loss 通常不区分背景前景，如果需要，可以修改 pt 的计算或加权。
+        # 目前保持原样，因为它惩罚的是所有类别的错误分类。
+        # 如果需要，可以修改 pt 的计算或加权。
         pt = torch.sum(targets_one_hot * probs, dim=1)  # 预测正确类别的概率
 
         # 避免log(0)
@@ -164,7 +192,11 @@ class CompoundLoss(nn.Module):
             edge_loss_sample = 0.0
             num_valid_classes = 0 # 统计存在于目标中的有效类别数
 
-            for c in range(1, self.num_classes): # 从类别1开始（忽略背景类别0）
+            # 循环时也跳过 ignore_index
+            for c in range(self.num_classes): # 遍历所有类别
+                if c == self.ignore_index: # 跳过背景/忽略类别
+                    continue
+
                 target_mask_c = (target_b == c).float()
 
                 # 如果当前类别在目标中不存在，跳过
@@ -175,20 +207,16 @@ class CompoundLoss(nn.Module):
 
                 # --- 计算精确边界 ---
                 # 使用 F.conv2d 实现膨胀和腐蚀来找边界
-                # 确保掩码是浮点型且有通道维度
                 target_mask_float = target_mask_c.unsqueeze(0).unsqueeze(0) # (1, 1, H, W)
-                # 定义 3x3 卷积核
                 kernel = torch.ones(1, 1, 3, 3, device=target_b.device)
-                # 膨胀: 卷积结果大于0即为膨胀区域
+                # 膨胀
                 dilated = F.conv2d(target_mask_float, kernel, padding=1) > 0
-                # 腐蚀: 卷积结果等于核大小 (9) 即为腐蚀区域
+                # 腐蚀
                 eroded = F.conv2d(target_mask_float, kernel, padding=1) == kernel.numel()
-                # 边界是膨胀和腐蚀的差集
+                # 边界
                 boundary = torch.logical_xor(dilated, eroded).squeeze().float() # (H, W)
 
                 # --- 计算距离变换 ---
-                # distance_transform_edt 需要二值输入，且前景为0，背景为1
-                # 我们要计算到前景(目标类别)边界的距离，所以输入是 (1 - target_mask_c)
                 dist_transform = distance_transform_edt(1 - target_mask_c.cpu().numpy())
                 dist_transform = torch.from_numpy(dist_transform).to(target_b.device)
 
@@ -201,21 +229,16 @@ class CompoundLoss(nn.Module):
 
                 # --- 计算边界损失 ---
                 pred_mask_c = (pred_b == c).float() # (H, W)
-                # 计算边界像素上的预测误差 (L1 范数)
                 pixel_error = torch.abs(pred_mask_c[edge_pixels] - target_mask_c[edge_pixels])
-                # 获取边界像素上的距离权重
                 distance_weight = torch.exp(-dist_transform[edge_pixels])
-                # 计算加权误差
                 weighted_error = pixel_error * distance_weight
-                # 计算当前类别的平均边界损失
                 class_edge_loss = weighted_error.sum() / num_edge_pixels
                 edge_loss_sample += class_edge_loss
 
-            # 如果样本中没有任何有效类别（理论上不应发生，除非mask全为0），则样本损失为0
             if num_valid_classes > 0:
                 edge_loss += edge_loss_sample / num_valid_classes # 对有效类别数取平均
-            # else: # 这种情况可以加个警告
-            #     print(f"警告: 样本 {b} 中没有找到任何有效类别 (1-{self.num_classes-1})")
+            # else:
+            #     print(f"警告: 样本 {b} 中没有找到任何有效的非忽略类别")
 
 
         # 返回批次的平均边界损失
