@@ -64,7 +64,49 @@ class SEBlock(nn.Module):
         return x * y.expand_as(x)
 
 
-# --- UNet with UNet 3+ Skip Connections and Dense Bottleneck ---
+# --- Criss-Cross Attention Block ---
+class CrissCrossAttention(nn.Module):
+    """ Criss-Cross Attention Module"""
+    def __init__(self, in_dim, reduction=8):
+        super(CrissCrossAttention, self).__init__()
+        self.query_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim // reduction, kernel_size=1)
+        self.key_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim // reduction, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim, kernel_size=1)
+        self.softmax = nn.Softmax(dim=-1)
+        self.gamma = nn.Parameter(torch.zeros(1)) # Learnable scale parameter, initialized to 0
+
+    def forward(self, x):
+        m_batchsize, _, height, width = x.size()
+        proj_query = self.query_conv(x)
+        proj_key = self.key_conv(x)
+        proj_value = self.value_conv(x)
+
+        # Horizontal context
+        proj_query_h = proj_query.permute(0, 2, 3, 1).contiguous().view(m_batchsize * height, width, -1)
+        proj_key_h = proj_key.permute(0, 2, 3, 1).contiguous().view(m_batchsize * height, -1, width)
+        proj_value_h = proj_value.permute(0, 2, 3, 1).contiguous().view(m_batchsize * height, width, -1)
+        energy_h = torch.bmm(proj_query_h, proj_key_h) # Shape: (B*H, W, W)
+        # energy_h = (proj_query_h @ proj_key_h.transpose(1, 2)) # Equivalent
+        attention_h = self.softmax(energy_h) # Softmax along the last dimension (Key positions)
+        context_h = torch.bmm(attention_h, proj_value_h)
+        context_h = context_h.view(m_batchsize, height, width, -1).permute(0, 3, 1, 2).contiguous()
+
+        # Vertical context
+        proj_query_v = proj_query.permute(0, 3, 1, 2).contiguous().view(m_batchsize * width, height, -1)
+        proj_key_v = proj_key.permute(0, 3, 1, 2).contiguous().view(m_batchsize * width, -1, height)
+        proj_value_v = proj_value.permute(0, 3, 1, 2).contiguous().view(m_batchsize * width, height, -1)
+        energy_v = torch.bmm(proj_query_v, proj_key_v) # Shape: (B*W, H, H)
+        # energy_v = (proj_query_v @ proj_key_v.transpose(1, 2)) # Equivalent
+        attention_v = self.softmax(energy_v) # Softmax along the last dimension (Key positions)
+        context_v = torch.bmm(attention_v, proj_value_v)
+        context_v = context_v.view(m_batchsize, width, height, -1).permute(0, 3, 2, 1).contiguous() # Note the permutation
+
+        # Aggregate context and apply residual connection
+        out = self.gamma * (context_h + context_v) + x # Additive aggregation
+        return out
+
+
+# --- UNet with UNet 3+ Skip Connections, Dense Bottleneck, SE and CCA ---
 
 class UNet(nn.Module):
     """
@@ -72,8 +114,10 @@ class UNet(nn.Module):
     1. UNet 3+ style full-scale skip connections.
     2. DenseNet-style bottleneck.
     3. Sub-pixel convolution for upsampling.
+    4. Squeeze-and-Excitation (SE) blocks in encoder and bottleneck.
+    5. Criss-Cross Attention (CCA) after bottleneck.
     """
-    def __init__(self, in_channels=1, out_channels=11, growth_rate=128, bn_size=4, num_dense_layers=4):
+    def __init__(self, in_channels=1, out_channels=11, growth_rate=128, bn_size=4, num_dense_layers=4, cca_reduction=8):
         super(UNet, self).__init__()
 
         # --- Encoder Blocks ---
@@ -102,6 +146,9 @@ class UNet(nn.Module):
         bottleneck_out_channels = bottleneck_in_channels + num_dense_layers * growth_rate # 512 + 4*128 = 1024
         self.se_bottleneck = SEBlock(bottleneck_out_channels)
 
+        # --- Criss-Cross Attention ---
+        self.cca = CrissCrossAttention(bottleneck_out_channels, reduction=cca_reduction)
+
         # --- Pooling Layers for UNet 3+ Skip Connections ---
         # These pool encoder features to match decoder feature map sizes
         self.pool1_d1 = nn.MaxPool2d(kernel_size=8, stride=8) # enc1 -> dec1 size
@@ -114,7 +161,7 @@ class UNet(nn.Module):
         self.pool1_d3 = nn.MaxPool2d(kernel_size=2, stride=2) # enc1 -> dec3 size
 
         # --- Decoder Blocks with Sub-pixel Upsampling ---
-        # Decoder 1 (Receives features from bottleneck and enc1, enc2, enc3, enc4)
+        # Decoder 1 (Receives features from CCA and enc1, enc2, enc3, enc4)
         self.upconv1 = self._make_subpixel_block(bottleneck_out_channels, 512) # Output: N, 512, H/8, W/8
         dec1_in_channels = 512 + 512 + 256 + 128 + 64 # upconv1 + enc4 + pooled enc3 + pooled enc2 + pooled enc1
         self.dec1 = self._make_decoder_block(dec1_in_channels, 512)           # Output: N, 512, H/8, W/8
@@ -182,17 +229,20 @@ class UNet(nn.Module):
         enc4 = self.se4(enc4)
 
         # --- Bottleneck ---
-        bottleneck = self.bottleneck(self.pool4(enc4))
-        bottleneck = self.se_bottleneck(bottleneck)
+        bottleneck_out = self.bottleneck(self.pool4(enc4))
+        bottleneck_se = self.se_bottleneck(bottleneck_out)
+
+        # --- Apply Criss-Cross Attention ---
+        cca_out = self.cca(bottleneck_se) # Apply CCA after SE block
 
         # --- Decoder Path with UNet 3+ Skip Connections ---
         # Decoder 1
-        up1 = self.upconv1(bottleneck)
+        up1 = self.upconv1(cca_out)
         # Pool encoder features to match dec1 size (H/8, W/8)
         enc1_d1 = self.pool1_d1(enc1)
         enc2_d1 = self.pool2_d1(enc2)
         enc3_d1 = self.pool3_d1(enc3)
-        # Concatenate features from bottleneck(up1), enc4, and pooled enc1, enc2, enc3
+        # Concatenate features from cca_out(up1), enc4, and pooled enc1, enc2, enc3
         cat1 = torch.cat((up1, enc4, enc3_d1, enc2_d1, enc1_d1), dim=1)
         dec1 = self.dec1(cat1)
 
