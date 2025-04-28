@@ -626,7 +626,7 @@ def main():
 
     # 训练相关参数
     parser.add_argument('--epochs', type=int, default=100, help='训练轮数')
-    parser.add_argument('--lr', type=float, default=0.0003, help='学习率')
+    parser.add_argument('--lr', type=float, default=0.001, help='学习率')
     parser.add_argument('--aug_prob', type=float, default=0.5, help='数据增强应用概率')
     parser.add_argument('--save_dir', type=str, default='train/checkpoints', help='模型和日志保存目录')
     parser.add_argument('--seed', type=int, default=42, help='随机种子')
