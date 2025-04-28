@@ -630,7 +630,7 @@ def main():
     parser.add_argument('--aug_prob', type=float, default=0.5, help='数据增强应用概率')
     parser.add_argument('--save_dir', type=str, default='train/checkpoints', help='模型和日志保存目录')
     parser.add_argument('--seed', type=int, default=42, help='随机种子')
-    parser.add_argument('--early_stopping_patience', type=int, default=15, help='早停耐心值 (epochs)')
+    parser.add_argument('--early_stopping_patience', type=int, default=20, help='早停耐心值 (epochs)')
 
     # 损失函数相关参数
     parser.add_argument('--alpha', type=float, default=0.2, help='Dice损失权重')
