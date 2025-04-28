@@ -1,136 +1,193 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
+# --- DenseNet Bottleneck Components ---
+
+class _DenseLayer(nn.Module):
+    """Basic building block for DenseBottleneck: BN-ReLU-Conv1x1-BN-ReLU-Conv3x3"""
+    def __init__(self, in_channels, growth_rate, bn_size=4):
+        super(_DenseLayer, self).__init__()
+        inter_channels = bn_size * growth_rate
+        self.norm1 = nn.BatchNorm2d(in_channels)
+        self.relu1 = nn.ReLU(inplace=True)
+        self.conv1 = nn.Conv2d(in_channels, inter_channels, kernel_size=1, stride=1, bias=False)
+
+        self.norm2 = nn.BatchNorm2d(inter_channels)
+        self.relu2 = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(inter_channels, growth_rate, kernel_size=3, stride=1, padding=1, bias=False)
+
+    def forward(self, x):
+        # x is a list of tensors or a single tensor
+        prev_features = x if isinstance(x, list) else [x]
+        concated_features = torch.cat(prev_features, 1)
+        bottleneck_output = self.conv1(self.relu1(self.norm1(concated_features)))
+        new_features = self.conv2(self.relu2(self.norm2(bottleneck_output)))
+        return new_features
+
+class DenseBottleneck(nn.Module):
+    """DenseNet-style bottleneck block"""
+    def __init__(self, in_channels, growth_rate, num_layers, bn_size=4):
+        super(DenseBottleneck, self).__init__()
+        self.layers = nn.ModuleList()
+        for i in range(num_layers):
+            layer_in_channels = in_channels + i * growth_rate
+            layer = _DenseLayer(layer_in_channels, growth_rate, bn_size)
+            self.layers.append(layer)
+
+    def forward(self, init_features):
+        features = [init_features]
+        for layer in self.layers:
+            new_features = layer(features)
+            features.append(new_features)
+        return torch.cat(features, 1)
+
+
+# --- UNet with UNet 3+ Skip Connections and Dense Bottleneck ---
 
 class UNet(nn.Module):
-    def __init__(self, in_channels=1, out_channels=11):
+    """
+    U-Net architecture with modifications:
+    1. UNet 3+ style full-scale skip connections.
+    2. DenseNet-style bottleneck.
+    3. Sub-pixel convolution for upsampling.
+    """
+    def __init__(self, in_channels=1, out_channels=11, growth_rate=128, bn_size=4, num_dense_layers=4):
         super(UNet, self).__init__()
 
-        # 编码器部分
-        self.enc1 = self._make_encoder_block(in_channels, 64)
+        # --- Encoder Blocks ---
+        self.enc1 = self._make_encoder_block(in_channels, 64)      # Output: N, 64, H, W
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        self.enc2 = self._make_encoder_block(64, 128)
+        self.enc2 = self._make_encoder_block(64, 128)              # Output: N, 128, H/2, W/2
         self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        self.enc3 = self._make_encoder_block(128, 256)
+        self.enc3 = self._make_encoder_block(128, 256)             # Output: N, 256, H/4, W/4
         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        self.enc4 = self._make_encoder_block(256, 512)
+        self.enc4 = self._make_encoder_block(256, 512)             # Output: N, 512, H/8, W/8
         self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # 瓶颈部分
-        self.bottleneck = self._make_encoder_block(512, 1024)
+        # --- Dense Bottleneck ---
+        bottleneck_in_channels = 512
+        self.bottleneck = DenseBottleneck(
+            in_channels=bottleneck_in_channels,
+            growth_rate=growth_rate,
+            num_layers=num_dense_layers,
+            bn_size=bn_size
+        )
+        # Output: N, bottleneck_in + num_layers * growth_rate, H/16, W/16
+        bottleneck_out_channels = bottleneck_in_channels + num_dense_layers * growth_rate # 512 + 4*128 = 1024
 
-        # --- 新增: 用于下采样编码器特征以匹配解码器尺度的池化层 ---
-        # For dec3: enc1 (64x64 -> 32x32)
-        self.pool1_d3 = nn.MaxPool2d(kernel_size=2, stride=2)
-        # For dec2: enc1 (64x64 -> 16x16), enc2 (32x32 -> 16x16)
-        self.pool1_d2 = nn.MaxPool2d(kernel_size=4, stride=4)
-        self.pool2_d2 = nn.MaxPool2d(kernel_size=2, stride=2)
-        # For dec1: enc1 (64x64 -> 8x8), enc2 (32x32 -> 8x8), enc3 (16x16 -> 8x8)
-        self.pool1_d1 = nn.MaxPool2d(kernel_size=8, stride=8)
-        self.pool2_d1 = nn.MaxPool2d(kernel_size=4, stride=4)
-        self.pool3_d1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        # --- Pooling Layers for UNet 3+ Skip Connections ---
+        # These pool encoder features to match decoder feature map sizes
+        self.pool1_d1 = nn.MaxPool2d(kernel_size=8, stride=8) # enc1 -> dec1 size
+        self.pool2_d1 = nn.MaxPool2d(kernel_size=4, stride=4) # enc2 -> dec1 size
+        self.pool3_d1 = nn.MaxPool2d(kernel_size=2, stride=2) # enc3 -> dec1 size
 
-        # 解码器部分 - 使用子像素卷积替代转置卷积
-        self.upconv1 = self._make_subpixel_block(1024, 512)
-        # --- 修改 dec1 输入通道: upconv1(512) + enc4(512) + pool1_d1(64) + pool2_d1(128) + pool3_d1(256) = 1512 ---
-        self.dec1 = self._make_decoder_block(512 + 512 + 64 + 128 + 256, 512)
+        self.pool1_d2 = nn.MaxPool2d(kernel_size=4, stride=4) # enc1 -> dec2 size
+        self.pool2_d2 = nn.MaxPool2d(kernel_size=2, stride=2) # enc2 -> dec2 size
 
-        self.upconv2 = self._make_subpixel_block(512, 256)
-        # --- 修改 dec2 输入通道: upconv2(256) + enc3(256) + pool1_d2(64) + pool2_d2(128) = 704 ---
-        self.dec2 = self._make_decoder_block(256 + 256 + 64 + 128, 256)
+        self.pool1_d3 = nn.MaxPool2d(kernel_size=2, stride=2) # enc1 -> dec3 size
 
-        self.upconv3 = self._make_subpixel_block(256, 128)
-        # --- 修改 dec3 输入通道: upconv3(128) + enc2(128) + pool1_d3(64) = 320 ---
-        self.dec3 = self._make_decoder_block(128 + 128 + 64, 128)
+        # --- Decoder Blocks with Sub-pixel Upsampling ---
+        # Decoder 1 (Receives features from bottleneck and enc1, enc2, enc3, enc4)
+        self.upconv1 = self._make_subpixel_block(bottleneck_out_channels, 512) # Output: N, 512, H/8, W/8
+        dec1_in_channels = 512 + 512 + 256 + 128 + 64 # upconv1 + enc4 + pooled enc3 + pooled enc2 + pooled enc1
+        self.dec1 = self._make_decoder_block(dec1_in_channels, 512)           # Output: N, 512, H/8, W/8
 
-        self.upconv4 = self._make_subpixel_block(128, 64)
-        # --- 修改 dec4 输入通道: upconv4(64) + enc1(64) = 128 (无需额外连接更浅层的) ---
-        self.dec4 = self._make_decoder_block(128, 64)
+        # Decoder 2 (Receives features from dec1 and enc1, enc2, enc3)
+        self.upconv2 = self._make_subpixel_block(512, 256)                    # Output: N, 256, H/4, W/4
+        dec2_in_channels = 256 + 256 + 128 + 64 # upconv2 + enc3 + pooled enc2 + pooled enc1
+        self.dec2 = self._make_decoder_block(dec2_in_channels, 256)           # Output: N, 256, H/4, W/4
 
-        # 输出层
-        self.out = nn.Conv2d(64, out_channels, kernel_size=1)
+        # Decoder 3 (Receives features from dec2 and enc1, enc2)
+        self.upconv3 = self._make_subpixel_block(256, 128)                    # Output: N, 128, H/2, W/2
+        dec3_in_channels = 128 + 128 + 64 # upconv3 + enc2 + pooled enc1
+        self.dec3 = self._make_decoder_block(dec3_in_channels, 128)           # Output: N, 128, H/2, W/2
 
+        # Decoder 4 (Receives features from dec3 and enc1)
+        self.upconv4 = self._make_subpixel_block(128, 64)                     # Output: N, 64, H, W
+        dec4_in_channels = 64 + 64 # upconv4 + enc1
+        self.dec4 = self._make_decoder_block(dec4_in_channels, 64)            # Output: N, 64, H, W
+
+        # --- Output Layer ---
+        self.out = nn.Conv2d(64, out_channels, kernel_size=1)                 # Output: N, num_classes, H, W
+
+    # --- Helper Methods for Building Blocks ---
     def _make_encoder_block(self, in_channels, out_channels):
+        """Creates a standard double convolution block for the encoder."""
         return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
 
     def _make_decoder_block(self, in_channels, out_channels):
+        """Creates a standard double convolution block for the decoder."""
         return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
 
     def _make_subpixel_block(self, in_channels, out_channels):
-        """
-        创建子像素卷积上采样块
-        """
+        """Creates an upsampling block using sub-pixel convolution (PixelShuffle)."""
         return nn.Sequential(
-            # 将输入通道映射到 out_channels*4 (因为上采样因子是2)
-            nn.Conv2d(in_channels, out_channels * 4, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, out_channels * 4, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels * 4),
             nn.ReLU(inplace=True),
-            # 使用PixelShuffle进行上采样，尺寸增加2倍
-            nn.PixelShuffle(2)
+            nn.PixelShuffle(2) # Upsamples by a factor of 2
         )
 
+    # --- Forward Pass ---
     def forward(self, x):
-        # 编码器路径
-        enc1 = self.enc1(x)         # N, 64, H, W
-        enc2 = self.enc2(self.pool1(enc1)) # N, 128, H/2, W/2
-        enc3 = self.enc3(self.pool2(enc2)) # N, 256, H/4, W/4
-        enc4 = self.enc4(self.pool3(enc3)) # N, 512, H/8, W/8
+        # --- Encoder Path ---
+        enc1 = self.enc1(x)
+        enc2 = self.enc2(self.pool1(enc1))
+        enc3 = self.enc3(self.pool2(enc2))
+        enc4 = self.enc4(self.pool3(enc3))
 
-        # 瓶颈
-        bottleneck = self.bottleneck(self.pool4(enc4)) # N, 1024, H/16, W/16
+        # --- Bottleneck ---
+        bottleneck = self.bottleneck(self.pool4(enc4))
 
-        # 解码器路径 (实现 UNet 3+ 风格的全尺度跳跃连接)
-
-        # --- 解码器层 1 ---
-        up1 = self.upconv1(bottleneck) # N, 512, H/8, W/8
-        # 下采样浅层编码器特征以匹配 enc4 的尺寸 (H/8, W/8)
+        # --- Decoder Path with UNet 3+ Skip Connections ---
+        # Decoder 1
+        up1 = self.upconv1(bottleneck)
+        # Pool encoder features to match dec1 size (H/8, W/8)
         enc1_d1 = self.pool1_d1(enc1)
         enc2_d1 = self.pool2_d1(enc2)
         enc3_d1 = self.pool3_d1(enc3)
-        # 拼接
-        cat1 = torch.cat((up1, enc4, enc3_d1, enc2_d1, enc1_d1), dim=1) # 512 + 512 + 256 + 128 + 64 = 1512
-        dec1 = self.dec1(cat1) # N, 512, H/8, W/8
+        # Concatenate features from bottleneck(up1), enc4, and pooled enc1, enc2, enc3
+        cat1 = torch.cat((up1, enc4, enc3_d1, enc2_d1, enc1_d1), dim=1)
+        dec1 = self.dec1(cat1)
 
-        # --- 解码器层 2 ---
-        up2 = self.upconv2(dec1) # N, 256, H/4, W/4
-        # 下采样浅层编码器特征以匹配 enc3 的尺寸 (H/4, W/4)
+        # Decoder 2
+        up2 = self.upconv2(dec1)
+        # Pool encoder features to match dec2 size (H/4, W/4)
         enc1_d2 = self.pool1_d2(enc1)
         enc2_d2 = self.pool2_d2(enc2)
-        # 拼接
-        cat2 = torch.cat((up2, enc3, enc2_d2, enc1_d2), dim=1) # 256 + 256 + 128 + 64 = 704
-        dec2 = self.dec2(cat2) # N, 256, H/4, W/4
+        # Concatenate features from dec1(up2), enc3, and pooled enc1, enc2
+        cat2 = torch.cat((up2, enc3, enc2_d2, enc1_d2), dim=1)
+        dec2 = self.dec2(cat2)
 
-        # --- 解码器层 3 ---
-        up3 = self.upconv3(dec2) # N, 128, H/2, W/2
-        # 下采样浅层编码器特征以匹配 enc2 的尺寸 (H/2, W/2)
+        # Decoder 3
+        up3 = self.upconv3(dec2)
+        # Pool encoder features to match dec3 size (H/2, W/2)
         enc1_d3 = self.pool1_d3(enc1)
-        # 拼接
-        cat3 = torch.cat((up3, enc2, enc1_d3), dim=1) # 128 + 128 + 64 = 320
-        dec3 = self.dec3(cat3) # N, 128, H/2, W/2
+        # Concatenate features from dec2(up3), enc2, and pooled enc1
+        cat3 = torch.cat((up3, enc2, enc1_d3), dim=1)
+        dec3 = self.dec3(cat3)
 
-        # --- 解码器层 4 ---
-        up4 = self.upconv4(dec3) # N, 64, H, W
-        # 无需下采样，直接拼接
-        cat4 = torch.cat((up4, enc1), dim=1) # 64 + 64 = 128
-        dec4 = self.dec4(cat4) # N, 64, H, W
+        # Decoder 4
+        up4 = self.upconv4(dec3)
+        # Concatenate features from dec3(up4) and enc1
+        cat4 = torch.cat((up4, enc1), dim=1)
+        dec4 = self.dec4(cat4)
 
-        # 输出层
+        # --- Output Layer ---
         outputs = self.out(dec4)
         return outputs
