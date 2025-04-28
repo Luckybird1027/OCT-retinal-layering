@@ -43,6 +43,27 @@ class DenseBottleneck(nn.Module):
         return torch.cat(features, 1)
 
 
+# --- Squeeze-and-Excitation Block ---
+
+class SEBlock(nn.Module):
+    """Squeeze-and-Excitation block"""
+    def __init__(self, channel, reduction=16):
+        super(SEBlock, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
+
 # --- UNet with UNet 3+ Skip Connections and Dense Bottleneck ---
 
 class UNet(nn.Module):
@@ -57,12 +78,16 @@ class UNet(nn.Module):
 
         # --- Encoder Blocks ---
         self.enc1 = self._make_encoder_block(in_channels, 64)      # Output: N, 64, H, W
+        self.se1 = SEBlock(64)
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.enc2 = self._make_encoder_block(64, 128)              # Output: N, 128, H/2, W/2
+        self.se2 = SEBlock(128)
         self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.enc3 = self._make_encoder_block(128, 256)             # Output: N, 256, H/4, W/4
+        self.se3 = SEBlock(256)
         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.enc4 = self._make_encoder_block(256, 512)             # Output: N, 512, H/8, W/8
+        self.se4 = SEBlock(512)
         self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
         # --- Dense Bottleneck ---
@@ -75,6 +100,7 @@ class UNet(nn.Module):
         )
         # Output: N, bottleneck_in + num_layers * growth_rate, H/16, W/16
         bottleneck_out_channels = bottleneck_in_channels + num_dense_layers * growth_rate # 512 + 4*128 = 1024
+        self.se_bottleneck = SEBlock(bottleneck_out_channels)
 
         # --- Pooling Layers for UNet 3+ Skip Connections ---
         # These pool encoder features to match decoder feature map sizes
@@ -147,12 +173,17 @@ class UNet(nn.Module):
     def forward(self, x):
         # --- Encoder Path ---
         enc1 = self.enc1(x)
+        enc1 = self.se1(enc1)
         enc2 = self.enc2(self.pool1(enc1))
+        enc2 = self.se2(enc2)
         enc3 = self.enc3(self.pool2(enc2))
+        enc3 = self.se3(enc3)
         enc4 = self.enc4(self.pool3(enc3))
+        enc4 = self.se4(enc4)
 
         # --- Bottleneck ---
         bottleneck = self.bottleneck(self.pool4(enc4))
+        bottleneck = self.se_bottleneck(bottleneck)
 
         # --- Decoder Path with UNet 3+ Skip Connections ---
         # Decoder 1
