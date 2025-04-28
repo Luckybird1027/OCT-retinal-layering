@@ -116,9 +116,9 @@ def mixed_noise_injection(img, noise_types=None, noise_params=None):
     # 默认噪声参数
     if noise_params is None:
         noise_params = {
-            'gaussian': {'mean': 0, 'std': 0.01},
-            'speckle': {'mean': 0, 'var': 0.01},
-            'poisson': {'scale': 10}
+            'gaussian': {'mean': 0, 'std': 0.005},
+            'speckle': {'mean': 0, 'var': 0.005},
+            'poisson': {'scale': 20}
         }
 
     # 复制图像
