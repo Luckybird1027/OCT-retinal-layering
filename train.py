@@ -558,15 +558,15 @@ def main():
 
     # 训练相关参数
     parser.add_argument('--epochs', type=int, default=100, help='训练轮数')
-    parser.add_argument('--lr', type=float, default=0.001, help='学习率')
-    parser.add_argument('--aug_prob', type=float, default=0.75, help='数据增强应用概率')
+    parser.add_argument('--lr', type=float, default=0.0003, help='学习率')
+    parser.add_argument('--aug_prob', type=float, default=0.5, help='数据增强应用概率')
     parser.add_argument('--save_dir', type=str, default='train/checkpoints', help='模型保存目录')
     parser.add_argument('--seed', type=int, default=42, help='随机种子')
 
     # 损失函数相关参数
-    parser.add_argument('--alpha', type=float, default=0.5, help='Dice损失权重')
-    parser.add_argument('--beta', type=float, default=0.5, help='Focal损失权重')
-    parser.add_argument('--gamma', type=float, default=0.1, help='边界损失权重')
+    parser.add_argument('--alpha', type=float, default=0.2, help='Dice损失权重')
+    parser.add_argument('--beta', type=float, default=0.8, help='Focal损失权重')
+    parser.add_argument('--gamma', type=float, default=0.05, help='边界损失权重')
 
     # 新增参数
     parser.add_argument('--num_classes', type=int, default=11, help='输出通道数/类别数')
@@ -601,7 +601,7 @@ def main():
     # 定义复合损失函数和优化器
     criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.num_classes).to(
         device)
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
     # 添加学习率调度器 (例如: 当验证 Dice 停止提升时降低学习率)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=5, verbose=True)
