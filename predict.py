@@ -140,8 +140,8 @@ def predict_folder(model, data_loader, output_dir, device, num_classes=11):
         pbar = tqdm(data_loader, desc='Predicting and Evaluating')
         for i, (image, mask) in enumerate(pbar):
             # 假设 data_loader 返回原始图像名或索引，如果不是，则生成一个
-            # image_name = data_loader.dataset.img_files[i] # 如果数据集暴露了这个信息
-            image_name = f'image_{i:04d}'  # 否则使用索引
+            image_name = data_loader.dataset.img_files[i] # 如果数据集暴露了这个信息
+            # image_name = f'image_{i:04d}'  # 否则使用索引
             image_names_list.append(image_name)
 
             output_path_single = os.path.join(output_dir, image_name)
