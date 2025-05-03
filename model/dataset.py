@@ -10,7 +10,7 @@ from utils.preprocess import ad_bm3d_image_denoising, pc_hpf_image_enhancement
 
 
 class OCTDataset(Dataset):
-    def __init__(self, images_dir, masks_dir, img_size=(720, 992), transform=None, preprocess=True):
+    def __init__(self, images_dir, masks_dir, img_size=(512, 704), transform=None, preprocess=True):
         self.images_dir = images_dir
         self.masks_dir = masks_dir
         self.img_size = img_size
@@ -78,17 +78,18 @@ class OCTDataset(Dataset):
         return img, mask
 
 
-def create_dataloader(images_dir, masks_dir, img_size=(720, 992), batch_size=1, shuffle=True, preprocess=True):
+def create_dataloader(images_dir, masks_dir, img_size=(512, 704), batch_size=1, shuffle=True, preprocess=True, num_workers=4):
     """
     创建数据加载器
 
     参数:
         images_dir: 图像目录
         masks_dir: 标签目录
-        img_size: 图像尺寸
+        img_size: 图像尺寸, e.g., (512, 704)
         batch_size: 批次大小
         shuffle: 是否打乱数据
         preprocess: 是否进行预处理
+        num_workers: 数据加载器工作线程数
 
     返回:
         PyTorch数据加载器
@@ -97,14 +98,16 @@ def create_dataloader(images_dir, masks_dir, img_size=(720, 992), batch_size=1, 
         images_dir=images_dir,
         masks_dir=masks_dir,
         img_size=img_size,
-        preprocess=preprocess
+        preprocess=preprocess,
+        # transform=None # 如果需要训练时增强，可以在这里传入或在外面创建Dataset时传入
     )
 
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
-        num_workers=4
+        num_workers=num_workers, # 使用传入的 num_workers
+        pin_memory=True # 建议开启以加速内存拷贝
     )
 
     return dataloader

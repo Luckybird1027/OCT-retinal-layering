@@ -617,18 +617,20 @@ def main():
     parser.add_argument('--train_masks', type=str, default='data/SJTU/train/mask', help='训练掩码目录')
     parser.add_argument('--val_images', type=str, default='data/SJTU/eval/img', help='验证图像目录')
     parser.add_argument('--val_masks', type=str, default='data/SJTU/eval/mask', help='验证掩码目录')
-    parser.add_argument('--batch_size', type=int, default=1, help='每个设备上的批次大小 (用于梯度累积)') # 修改注释
+    parser.add_argument('--img_height', type=int, default=512, help='调整后的图像高度')
+    parser.add_argument('--img_width', type=int, default=704, help='调整后的图像宽度')
+    parser.add_argument('--batch_size', type=int, default=2, help='每个设备上的批次大小 (用于梯度累积)')
     parser.add_argument('--num_workers', type=int, default=4, help='数据加载器线程数')
 
     # 模型相关参数
     parser.add_argument('--in_channels', type=int, default=1, help='输入通道数')
-    # parser.add_argument('--out_channels', type=int, default=11, help='输出通道数 (已被 num_classes 替代)') # 注释掉旧参数
+    parser.add_argument('--growth_rate', type=int, default=64, help='DenseBottleneck 的增长率')
 
     # 训练相关参数
     parser.add_argument('--epochs', type=int, default=100, help='训练轮数')
     parser.add_argument('--lr', type=float, default=0.001, help='学习率')
     parser.add_argument('--aug_prob', type=float, default=0.5, help='数据增强应用概率')
-    parser.add_argument('--save_dir', type=str, default='train/checkpoints', help='模型和日志保存目录')
+    parser.add_argument('--save_dir', type=str, default='train/checkpoints_512x704_gr64', help='模型和日志保存目录 (建议区分)')
     parser.add_argument('--seed', type=int, default=42, help='随机种子')
     parser.add_argument('--early_stopping_patience', type=int, default=20, help='早停耐心值 (epochs)')
 
@@ -639,8 +641,8 @@ def main():
 
     # 新增/修改参数
     parser.add_argument('--num_classes', type=int, default=11, help='输出通道数/类别数')
-    parser.add_argument('--accumulation_steps', type=int, default=8, help='梯度累积步数 (模拟更大的批次)') # 添加梯度累积参数
-    parser.add_argument('--weight_decay', type=float, default=1e-4, help='优化器权重衰减 (L2 正则化)') # 添加权重衰减参数
+    parser.add_argument('--accumulation_steps', type=int, default=4, help='梯度累积步数 (模拟更大的批次)')
+    parser.add_argument('--weight_decay', type=float, default=1e-4, help='优化器权重衰减 (L2 正则化)')
 
     args = parser.parse_args()
 
@@ -656,24 +658,24 @@ def main():
     train_masks_dir = args.train_masks
     val_images_dir = args.val_images
     val_masks_dir = args.val_masks
+    img_size = (args.img_height, args.img_width)
 
     # 定义自定义数据增强
     train_transform = CustomTransform(apply_prob=args.aug_prob)
 
     # 创建数据集和数据加载器
-    # 注意：这里的 batch_size 是每个累积步骤的大小
-    train_dataset = OCTDataset(train_images_dir, train_masks_dir, transform=train_transform)
-    val_dataset = OCTDataset(val_images_dir, val_masks_dir, transform=None) # 验证集通常不应用随机变换
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True) # 启用 pin_memory 加速数据传输
+    train_dataset = OCTDataset(train_images_dir, train_masks_dir, img_size=img_size, transform=train_transform)
+    val_dataset = OCTDataset(val_images_dir, val_masks_dir, img_size=img_size, transform=None)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
 
     # 创建模型
-    model = UNet(in_channels=args.in_channels, out_channels=args.num_classes).to(device)
+    model = UNet(in_channels=args.in_channels, out_channels=args.num_classes, growth_rate=args.growth_rate).to(device)
 
     # 定义复合损失函数和优化器
     criterion = CompoundLoss(alpha=args.alpha, beta=args.beta, gamma=args.gamma, num_classes=args.num_classes).to(
         device)
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) # 使用 args.weight_decay
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # 添加学习率调度器
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=5, verbose=True)
@@ -686,6 +688,8 @@ def main():
     print(f"设备批次大小: {args.batch_size}")
     print(f"梯度累积步数: {args.accumulation_steps}")
     print(f"有效批次大小: {effective_batch_size}")
+    print(f"输入图像尺寸: {img_size}")
+    print(f"DenseBottleneck增长率: {args.growth_rate}")
     print(f"初始学习率: {args.lr}")
     print(f"权重衰减 (L2正则化): {args.weight_decay}")
     print(f"训练轮数: {args.epochs}")
@@ -706,9 +710,9 @@ def main():
         device=device,
         num_epochs=args.epochs,
         save_dir=args.save_dir,
-        early_stopping_patience=args.early_stopping_patience, # 使用 args.early_stopping_patience
+        early_stopping_patience=args.early_stopping_patience,
         num_classes=args.num_classes,
-        accumulation_steps=args.accumulation_steps # 传递梯度累积步数
+        accumulation_steps=args.accumulation_steps
     )
 
     print('训练完成!')
