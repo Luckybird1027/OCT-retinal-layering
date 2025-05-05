@@ -197,13 +197,13 @@ def main():
     print(f'使用设备: {device}')
 
     # --- 配置参数 --- (可以替换为 argparse)
-    model_path = 'train/checkpoints/best_model.pth'  # 或者 'final_model.pth'
+    model_path = 'train/checkpoints_512x704_gr64/best_model.pth'  # 或者 'final_model.pth'
     predict_images_dir = 'data/SJTU/test/img'
     predict_masks_dir = 'data/SJTU/test/mask'
     output_results_dir = 'results/predictions_with_metrics'
     batch_size = 1  # 评估时通常 batch_size=1
     num_classes = 11  # 确保与模型训练时一致
-    img_size = (720, 992)  # 确保与模型训练/数据集定义一致
+    img_size = (512, 704)  # 确保与模型训练/数据集定义一致
     preprocess_in_loader = True  # 是否在 dataloader 中进行预处理
 
     # 加载模型

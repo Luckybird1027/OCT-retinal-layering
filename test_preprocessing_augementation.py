@@ -9,6 +9,7 @@ from utils.preprocess import (
     bm3d_denoising,
     phase_congruency_enhancement,
     butterworth_highpass_filter,
+    standardize_size,
 )
 from utils.augmentation import (
     tps_transform,
@@ -20,7 +21,6 @@ from utils.augmentation import (
     adjust_brightness_contrast,
     spatial_domain_augmentation,
     intensity_domain_augmentation,
-    standardize_size,
 )
 
 # --- 配置 ---
