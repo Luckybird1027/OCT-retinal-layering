@@ -117,7 +117,7 @@ class UNet(nn.Module):
     4. Squeeze-and-Excitation (SE) blocks in encoder and bottleneck.
     5. Criss-Cross Attention (CCA) after bottleneck.
     """
-    def __init__(self, in_channels=1, out_channels=11, growth_rate=128, bn_size=4, num_dense_layers=4, cca_reduction=8):
+    def __init__(self, in_channels=1, out_channels=11, growth_rate=64, bn_size=4, num_dense_layers=4, cca_reduction=8):
         super(UNet, self).__init__()
 
         # --- Encoder Blocks ---
