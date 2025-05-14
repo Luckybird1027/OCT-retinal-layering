@@ -249,20 +249,42 @@ if __name__ == "__main__":
         filename = f"brightness+0.0_contrast{contrast_val:.1f}"
         save_image(img_bc, method_name, filename, OUTPUT_DIR_BASE)
 
-    # 12. 标准化尺寸
-    method_name = "12_standardize_size"
+# 12. 标准化尺寸 (展示中间步骤)
+    method_name = "12_standardize_size_steps"
     print(f"Testing {method_name}...")
+    # 选择一个与原图尺寸差异较大的目标尺寸以突出效果
     h_orig, w_orig = original_img.shape[:2]
-    target_sizes_test = [(h_orig // 2, w_orig // 2), (int(h_orig*0.8), int(w_orig*0.8))] # 示例目标尺寸
-    if h_orig < 100 or w_orig < 100: # 如果原图太小，用固定小尺寸
-        target_sizes_test = [(64, 128), (128, 256)]
-    for target_h, target_w in target_sizes_test:
-        if target_h > 0 and target_w > 0:
-            img_standardized, _ = standardize_size(original_img.copy(), target_size=(target_h, target_w))
-            filename = f"target_{target_h}x{target_w}"
-            save_image(img_standardized, method_name, filename, OUTPUT_DIR_BASE)
-        else:
-            print(f"Skipping standardize size for target {target_h}x{target_w} due to non-positive dimensions.")
+    target_size_test = (int(h_orig * 0.7), int(w_orig * 1.2)) # 示例: 缩小高度, 放大宽度
+    if h_orig < 100 or w_orig < 100: # 如果原图太小
+        target_size_test = (128, 256)
+    target_h, target_w = target_size_test
+
+    # --- 模拟 standardize_size 的步骤 ---
+    # a) 计算缩放比例和新尺寸
+    scale = max(target_h / h_orig, target_w / w_orig)
+    new_h, new_w = int(h_orig * scale), int(w_orig * scale)
+
+    # b) 缩放图像
+    resized_img_step = cv2.resize(original_img.copy(), (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    filename_resized = f"step1_resized_to_{new_h}x{new_w}"
+    save_image(resized_img_step, method_name, filename_resized, OUTPUT_DIR_BASE)
+
+    # c) 计算裁剪起始点
+    start_y = max(0, (new_h - target_h) // 2)
+    start_x = max(0, (new_w - target_w) // 2)
+
+    # d) 裁剪到目标尺寸 (这是裁剪后的核心内容，未填充)
+    # 注意: 这里的裁剪尺寸可能小于target_size, 如果缩放后图像小于目标
+    crop_end_y = min(new_h, start_y + target_h)
+    crop_end_x = min(new_w, start_x + target_w)
+    cropped_img_step = resized_img_step[start_y:crop_end_y, start_x:crop_end_x]
+    filename_cropped = f"step2_cropped_part_{cropped_img_step.shape[0]}x{cropped_img_step.shape[1]}"
+    save_image(cropped_img_step, method_name, filename_cropped, OUTPUT_DIR_BASE)
+
+    # --- 调用原函数获取最终结果 (包含填充) ---
+    final_img, _ = standardize_size(original_img.copy(), target_size=target_size_test)
+    filename_final = f"step3_final_padded_{target_h}x{target_w}"
+    save_image(final_img, method_name, filename_final, OUTPUT_DIR_BASE)
 
 
     print("\n--- Testing Combined Augmentations (Single Random Example) ---")

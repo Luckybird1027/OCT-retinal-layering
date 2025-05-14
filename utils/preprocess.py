@@ -6,7 +6,7 @@ from bm3d import BM3DProfile
 from scipy import ndimage
 from scipy.fftpack import fft2, ifft2, fftshift, ifftshift
 
-def standardize_size(img, label=None, target_size=(720, 992)):
+def standardize_size(img, label=None, target_size=(512, 704)):
     """
     将图像标准化为固定尺寸（保持长宽比的缩放+中心裁剪）
 
