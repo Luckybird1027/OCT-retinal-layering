@@ -294,9 +294,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             images = images.to(device)
             masks = masks.to(device)
 
-            # 不需要在这里 zero_grad() 了
-            # optimizer.zero_grad()
-
             outputs = model(images)
             raw_loss, loss_components = criterion(outputs, masks) # 获取原始损失
 
